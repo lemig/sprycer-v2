@@ -174,3 +174,21 @@ Miguel is a solo developer who shipped this app in 2012, has been maintaining it
 He has a real meeting with the client next week. Don't waste hours. Move fast. When in doubt, pick the simpler option. Ship something working by Sunday night, polish in the following weeks if needed.
 
 The default is to TRUST Miguel's judgment on product behavior (he knows Schleiper's workflows from 14 years of operating this) and lean on Claude for stack mechanics.
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run (PLAN.md generated from /office-hours) |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | ISSUES FOUND | 10 structural findings, 4 incorporated as cross-model tensions |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (PLAN) | 13 issues across Architecture/CodeQuality/Tests/Performance, 0 unresolved, 3 critical failure-mode gaps closed via TODOs |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | Tension A surfaces UI parity needs; H16 dedicated to it |
+| DX Review | `/plan-devex-review` | Developer experience | 0 | — | n/a, internal tool for one client |
+
+- **CODEX:** 10 findings, 4 incorporated (UI/route parity, no-auto-accept-without-eval, append-only PriceObservation w/ transaction.atomic, controllers audit). Findings #3 (URL discovery), #8 partial (controllers grepped), #10 (wrong-project critique) noted, not actioned per user judgment.
+- **CROSS-MODEL:** Eng review found data-model shape gaps; codex found cutover-shape gaps. Combined: PLAN.md was under-scoped on data model AND on cutover semantics. Both sets of issues now addressed in updated H1-H20.
+- **UNRESOLVED:** 0
+- **VERDICT:** ENG CLEARED — ready to implement. Full revised hour-by-hour plan in eng review output (top of `.context/todos.md`). Original PLAN.md sections above remain accurate except: original H1 model list (replace with 12 corrected entities), H9 (skip — defer scrape cache), H14 (skip — auto-accept disabled), H16 (was backfill; now UI parity per Tension A), H17 (now also seeds all Schleiper users + uses append-only PriceObservation), Risks #1 (mitigated by Tension C). No other block reads change.
+
