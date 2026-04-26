@@ -7,6 +7,7 @@ import pgvector.django.indexes
 import pgvector.django.vector
 from django.conf import settings
 from django.db import migrations, models
+from pgvector.django import VectorExtension
 
 
 class Migration(migrations.Migration):
@@ -18,6 +19,8 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Must run before any HnswIndex creation. Idempotent (CREATE EXTENSION IF NOT EXISTS).
+        VectorExtension(),
         migrations.CreateModel(
             name='Brand',
             fields=[
