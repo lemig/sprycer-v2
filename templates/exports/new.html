@@ -1,0 +1,25 @@
+{% extends "layouts/base.html" %}
+{% block title %}New export{% endblock %}
+{% block content %}
+<h1>New export</h1>
+<form method="post" action="{% url 'exports:new' %}">
+  {% csrf_token %}
+  <p>
+    <label>Retailer</label><br>
+    <select name="retailer_id" required>
+      {% for r in retailers %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+    </select>
+  </p>
+  <p>
+    <label>Format</label><br>
+    <select name="format" required>
+      <option value="csv">CSV</option>
+      <option value="xlsx">Excel (.xlsx)</option>
+    </select>
+  </p>
+  <p>
+    <button class="btn btn-primary" type="submit">Generate export</button>
+    <a href="{% url 'exports:list' %}" class="btn">Cancel</a>
+  </p>
+</form>
+{% endblock %}

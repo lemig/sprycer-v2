@@ -1,0 +1,13 @@
+{% extends "layouts/base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<h1>Sign in</h1>
+<form method="post" style="max-width:340px;">
+  {% csrf_token %}
+  {% if form.non_field_errors %}<div class="alert">{{ form.non_field_errors }}</div>{% endif %}
+  <p><label>Username</label><br><input type="text" name="username" autofocus required></p>
+  <p><label>Password</label><br><input type="password" name="password" required></p>
+  <p><button class="btn btn-primary" type="submit">Sign in</button></p>
+  <input type="hidden" name="next" value="{{ next }}">
+</form>
+{% endblock %}

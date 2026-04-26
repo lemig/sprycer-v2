@@ -1,0 +1,22 @@
+{% extends "layouts/base.html" %}
+{% block title %}New import{% endblock %}
+{% block content %}
+<h1>New import</h1>
+<form method="post" enctype="multipart/form-data" action="{% url 'imports:new' %}">
+  {% csrf_token %}
+  <p>
+    <label>Importer</label><br>
+    <select name="importer_class_name" required>
+      <option value="SchleiperImporter">SchleiperImporter</option>
+    </select>
+  </p>
+  <p>
+    <label>File (Excel or CSV)</label><br>
+    <input type="file" name="file" accept=".xlsx,.xls,.csv,.ods" required>
+  </p>
+  <p>
+    <button class="btn btn-primary" type="submit">Upload</button>
+    <a href="{% url 'imports:list' %}" class="btn">Cancel</a>
+  </p>
+</form>
+{% endblock %}

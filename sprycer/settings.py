@@ -90,3 +90,7 @@ EMBEDDING_DIMS = 1536
 LLM_MATCH_MODEL = 'gpt-4o-mini'
 
 SLACK_WEBHOOK_URL = config('SLACK_WEBHOOK_URL', default='')
+
+LOGIN_URL = '/accounts/login/'
+LOGIN_REDIRECT_URL = '/imports/'
+LOGOUT_REDIRECT_URL = '/accounts/login/'
