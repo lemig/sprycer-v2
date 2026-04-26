@@ -29,6 +29,7 @@ from django.utils import timezone
 from . import REGISTRY, get_spec
 from .geant import ParsedOffer
 from ..alerts import alert_scrape_run
+from ..embeddings import embed_offer
 from ..models import Brand, Channel, Offer, Page, PriceObservation, Retailer, Website
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,9 @@ def _persist_offers(parsed: list[ParsedOffer], page: Page, ctx: _Context, vat_ra
             price_currency=p.price_currency,
             observed_at=timezone.now(),
         )
+        # Best-effort re-embed when name/description changed (no-op without
+        # OPENAI_API_KEY). Pipeline tolerates failure — backfill picks up later.
+        embed_offer(offer)
         written += 1
     return written
 

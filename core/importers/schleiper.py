@@ -35,6 +35,7 @@ import pandas as pd
 from django.db import transaction
 from django.utils import timezone
 
+from ..embeddings import embed_offer
 from ..models import Brand, Channel, Import, Offer, PriceObservation, Retailer, Website
 
 
@@ -241,6 +242,11 @@ def _persist_row(fields: _OfferFields, ctx: _SchleiperContext) -> Offer:
             price_currency='EUR',
             observed_at=fields.price_at or timezone.now(),
         )
+
+    # Best-effort re-embed when name/description changed. Returns False silently
+    # if OPENAI_API_KEY is unset (dev/test) or the API call failed — backfill
+    # cron will pick those up.
+    embed_offer(offer)
 
     return offer
 
