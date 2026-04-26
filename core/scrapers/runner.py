@@ -28,6 +28,7 @@ from django.utils import timezone
 
 from . import REGISTRY, get_spec
 from .geant import ParsedOffer
+from ..alerts import alert_scrape_run
 from ..models import Brand, Channel, Offer, Page, PriceObservation, Retailer, Website
 
 logger = logging.getLogger(__name__)
@@ -185,4 +186,5 @@ def scrape_queue(*, limit: int = 100, delay: float = DEFAULT_DELAY_SECONDS,
         except Exception:
             logger.exception('Scrape failed for %s', page.url)
             counters['failures'] += 1
+    alert_scrape_run(counters)
     return counters

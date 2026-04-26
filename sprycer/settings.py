@@ -88,3 +88,5 @@ OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
 EMBEDDING_MODEL = 'text-embedding-3-small'
 EMBEDDING_DIMS = 1536
 LLM_MATCH_MODEL = 'gpt-4o-mini'
+
+SLACK_WEBHOOK_URL = config('SLACK_WEBHOOK_URL', default='')
