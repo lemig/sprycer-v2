@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Callable
 
-from . import geant
+from . import geant, rougier
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,13 @@ REGISTRY: dict[str, ScraperSpec] = {
         website_host='www.geant-beaux-arts.fr',
         vat_rate=0.20,
     ),
-    # Rougier & Plé scraper lands in H7 (microdata per eng review 1D, vat_rate=0.20)
+    'www.rougier-ple.fr': ScraperSpec(
+        parse=rougier.parse,
+        retailer_name='Rougier & Plé',
+        channel_name='rougier-ple.fr',
+        website_host='www.rougier-ple.fr',
+        vat_rate=0.20,
+    ),
 }
 
 

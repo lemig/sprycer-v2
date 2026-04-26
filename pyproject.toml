@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
     "httpx>=0.28",
+    "beautifulsoup4>=4.13",
 ]
 
 [dependency-groups]
