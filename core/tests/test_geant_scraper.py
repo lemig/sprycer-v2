@@ -230,14 +230,24 @@ class TestScrapeUrl:
         assert written == 3
         assert Offer.objects.count() == 3
 
-    def test_writes_fresh_price_observation_per_scrape(self):
+    def test_writes_fresh_price_observation_per_scrape_with_be_vat(self):
+        # BE: 21% VAT. €1.00 TTC -> round(100 / 1.21) = 83 cents HT.
+        # €1.50 TTC -> round(150 / 1.21) = 124 cents HT.
         html_v1 = self._html([_variant(sku='A', price='1.00')])
         html_v2 = self._html([_variant(sku='A', price='1.50')])
         scrape_url(self.URL, html=html_v1)
         scrape_url(self.URL, html=html_v2)
         offer = Offer.objects.get(sku='A')
         prices = list(offer.price_observations.order_by('observed_at').values_list('price_cents', flat=True))
-        assert prices == [100, 150]
+        assert prices == [83, 124]
+
+    def test_fr_vat_conversion(self):
+        # FR: 20% VAT. €2.44 TTC -> round(244 / 1.20) = 203 cents HT.
+        url = 'https://www.geant-beaux-arts.fr/test.html'
+        scrape_url(url, html=self._html([_variant(sku='A', price='2.44')]))
+        offer = Offer.objects.get(sku='A')
+        po = offer.price_observations.first()
+        assert po.price_cents == 203
 
     def test_re_scrape_upserts_offer_no_duplicate(self):
         scrape_url(self.URL, html=self._html([_variant(sku='A', price='1.00')]))

@@ -74,7 +74,18 @@ def fetch(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> str:
         return response.text
 
 
-def _persist_offers(parsed: list[ParsedOffer], page: Page, ctx: _Context) -> int:
+def _ttc_to_ht_cents(ttc_cents: int, vat_rate: float) -> int:
+    """Convert displayed-TTC price to stored-HT price, matching legacy semantics.
+
+    Legacy: `(price_ttc * 100 / 121).round(2)` for BE, /120 for FR. We work in
+    integer cents so a single round() suffices. vat_rate=0 leaves the value
+    unchanged (used for sites that already display HT)."""
+    if vat_rate <= 0:
+        return ttc_cents
+    return int(round(ttc_cents / (1 + vat_rate)))
+
+
+def _persist_offers(parsed: list[ParsedOffer], page: Page, ctx: _Context, vat_rate: float) -> int:
     """UPSERT each parsed offer + create a fresh PriceObservation row. Returns
     the number of offers written."""
     written = 0
@@ -92,7 +103,7 @@ def _persist_offers(parsed: list[ParsedOffer], page: Page, ctx: _Context) -> int
         offer.pages.add(page)
         PriceObservation.objects.create(
             offer=offer,
-            price_cents=p.price_cents,
+            price_cents=_ttc_to_ht_cents(p.price_cents, vat_rate),
             price_currency=p.price_currency,
             observed_at=timezone.now(),
         )
@@ -135,7 +146,7 @@ def scrape_url(url: str, *, html: str | None = None) -> int:
         page.save(update_fields=['scraped_at', 'last_error', 'consecutive_failures', 'updated_at'])
         raise NoOffersFound(f'0 offers parsed from {url}')
 
-    written = _persist_offers(parsed, page, ctx)
+    written = _persist_offers(parsed, page, ctx, vat_rate=spec.vat_rate)
     page.scraped_at = timezone.now()
     page.last_error = ''
     page.last_status_code = 200
