@@ -14,6 +14,7 @@ from core.scrapers.geant import parse_jsonld
 from core.scrapers.runner import (
     NoOffersFound,
     UnsupportedHost,
+    scrape_queue,
     scrape_url,
 )
 
@@ -279,3 +280,33 @@ class TestScrapeUrl:
         scrape_url(self.URL, html=self._html([_variant(sku='Y', price='1.00')]))
         page = Page.objects.get(url=self.URL)
         assert page.consecutive_failures == 0
+
+
+@pytest.mark.django_db
+class TestScrapeQueue:
+    """Regression: never-scraped pages (scraped_at IS NULL) must be picked up
+    by scrape_queue. Without the IS NULL clause they'd be invisible forever."""
+
+    def test_null_scraped_at_pages_are_picked_up(self):
+        from core.models import Page, Website
+        # A freshly seeded page on a known scrapable host
+        web, _ = Website.objects.get_or_create(host='www.geant-beaux-arts.be',
+                                               defaults={'scrapable': True})
+        Page.objects.create(url='https://www.geant-beaux-arts.be/never-scraped.html',
+                            website=web)
+
+        # Run with delay=0 to skip sleeps; html injected via monkey patch isn't easy here,
+        # so we accept that scrape_url will try to fetch and fail. The point is that the
+        # queue *selects* the page — fetch fails are counted as failures, not skipped.
+        # We patch scrape_url to a no-op for the assertion.
+        from core.scrapers import runner
+        called = []
+        original = runner.scrape_url
+        runner.scrape_url = lambda url, **kw: called.append(url) or 0
+        try:
+            counters = scrape_queue(limit=10, delay=0, max_age_hours=12)
+        finally:
+            runner.scrape_url = original
+
+        assert called == ['https://www.geant-beaux-arts.be/never-scraped.html']
+        assert counters['pages_scraped'] == 1

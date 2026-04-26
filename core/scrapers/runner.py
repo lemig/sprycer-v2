@@ -23,6 +23,7 @@ from datetime import timedelta
 from urllib.parse import urlparse
 
 import httpx
+from django.db.models import Q
 from django.utils import timezone
 
 from . import REGISTRY, get_spec
@@ -164,10 +165,11 @@ def scrape_queue(*, limit: int = 100, delay: float = DEFAULT_DELAY_SECONDS,
     dict for ops dashboards / Slack alerts (H10).
     """
     cutoff = timezone.now() - timedelta(hours=max_age_hours)
+    # Never-scraped pages (scraped_at IS NULL) come first; then stale ones.
     pages = list(Page.objects.filter(
         website__scrapable=True
     ).filter(
-        scraped_at__lt=cutoff
+        Q(scraped_at__isnull=True) | Q(scraped_at__lt=cutoff)
     ).order_by('scraped_at')[:limit])
 
     counters = {'pages_scraped': 0, 'offers_written': 0, 'failures': 0, 'no_offers': 0}
