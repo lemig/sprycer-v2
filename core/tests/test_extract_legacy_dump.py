@@ -68,7 +68,7 @@ class TestParseCopyTimestamp:
 
 
 def _versions_row(*, idx_item_type=1, idx_created_at=6, idx_object_changes=7,
-                  item_type='Offer', created_at='2026-01-15 10:00:00',
+                  item_type='PricePoint', created_at='2026-01-15 10:00:00',
                   object_changes='{"price_cents":[100,200]}'):
     """Build a tab-separated row with 14 cells matching the versions table
     column order: id, item_type, item_id, event, whodunnit, object, created_at,
@@ -88,7 +88,7 @@ def _versions_row(*, idx_item_type=1, idx_created_at=6, idx_object_changes=7,
 def _should_keep(line: str, cutoff: datetime,
                  idx_item_type=1, idx_created_at=6, idx_object_changes=7) -> bool:
     fields = line.rstrip('\n').split('\t')
-    if fields[idx_item_type] != 'Offer':
+    if fields[idx_item_type] != 'PricePoint':
         return False
     if 'price_cents' not in fields[idx_object_changes]:
         return False
@@ -102,23 +102,30 @@ CUTOFF_2025_04 = datetime(2025, 4, 26)
 
 
 class TestVersionsFilter:
-    def test_recent_offer_price_change_is_kept(self):
-        line = _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',
+    def test_recent_pricepoint_price_change_is_kept(self):
+        line = _versions_row(item_type='PricePoint', created_at='2026-01-15 10:00:00',
                              object_changes='{"price_cents":[100,200]}')
         assert _should_keep(line, CUTOFF_2025_04) is True
 
     def test_old_row_is_dropped(self):
-        line = _versions_row(item_type='Offer', created_at='2018-01-15 10:00:00',
+        line = _versions_row(item_type='PricePoint', created_at='2018-01-15 10:00:00',
                              object_changes='{"price_cents":[100,200]}')
         assert _should_keep(line, CUTOFF_2025_04) is False
 
-    def test_non_offer_item_dropped(self):
-        line = _versions_row(item_type='Brand', created_at='2026-01-15 10:00:00',
+    def test_offer_item_dropped(self):
+        # Verified live: Offer rows in versions never carry price_cents in
+        # object_changes (price lives on PricePoint, not Offer).
+        line = _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',
+                             object_changes='{"price_cents":[100,200]}')
+        assert _should_keep(line, CUTOFF_2025_04) is False
+
+    def test_matching_item_dropped(self):
+        line = _versions_row(item_type='Matching', created_at='2026-01-15 10:00:00',
                              object_changes='{"price_cents":[100,200]}')
         assert _should_keep(line, CUTOFF_2025_04) is False
 
     def test_no_price_change_dropped(self):
-        line = _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',
+        line = _versions_row(item_type='PricePoint', created_at='2026-01-15 10:00:00',
                              object_changes='{"name":["A","B"]}')
         assert _should_keep(line, CUTOFF_2025_04) is False
 
@@ -167,13 +174,13 @@ def mini_dump(tmp_path):
         'COPY public.versions (id, item_type, item_id, event, whodunnit, object, '
         'created_at, object_changes, transaction_id, price_change_percent, '
         'discount_percent, retailer_id, website_id, public) FROM stdin;\n'
-        + _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',
+        + _versions_row(item_type='PricePoint', created_at='2026-01-15 10:00:00',
                         object_changes='{"price_cents":[100,200]}')
-        + _versions_row(item_type='Offer', created_at='2018-01-15 10:00:00',  # too old
+        + _versions_row(item_type='PricePoint', created_at='2018-01-15 10:00:00',  # too old
                         object_changes='{"price_cents":[100,200]}')
-        + _versions_row(item_type='Brand', created_at='2026-01-15 10:00:00',  # not Offer
+        + _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',  # not PricePoint
                         object_changes='{"price_cents":[100,200]}')
-        + _versions_row(item_type='Offer', created_at='2026-01-15 10:00:00',  # no price change
+        + _versions_row(item_type='PricePoint', created_at='2026-01-15 10:00:00',  # no price change
                         object_changes='{"name":["A","B"]}')
         + '\\.\n'
     )

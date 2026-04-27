@@ -390,36 +390,44 @@ class Command(BaseCommand):
         return n
 
     def _migrate_historical_versions(self, legacy, history_months: int):
-        """TODO #7: 12 months of Offer price changes -> PriceObservation rows.
+        """TODO #7: backfill last N months of price changes from the legacy
+        paper_trail.versions table into PriceObservation.
 
-        The extractor already filtered the dump to (item_type='Offer' AND
-        last 12 months AND object_changes contains 'price_cents'). We further
-        parse object_changes to get the new price_cents value and create a
-        PriceObservation row at created_at.
+        Legacy puts the price column on PricePoint, not Offer, so paper_trail
+        logs price_cents changes with item_type='PricePoint'. versions.item_id
+        is therefore the PricePoint.id; we resolve it to Offer.id via the
+        price_points table (1:1 — PricePoint has UNIQUE(offer_id) in legacy).
         """
+        # Build PricePoint.id -> Offer.id mapping (~267K rows, ~4 MB memory).
+        legacy.execute('SELECT id, offer_id FROM price_points WHERE offer_id IS NOT NULL')
+        price_point_to_offer = dict(legacy.fetchall())
+
         cutoff = timezone.now() - timedelta(days=history_months * 30)
         legacy.execute(
             "SELECT item_id, created_at, object_changes "
             "FROM versions "
-            "WHERE item_type = 'Offer' AND created_at >= %s "
+            "WHERE item_type = 'PricePoint' AND created_at >= %s "
             "AND object_changes::text LIKE %s",
             (cutoff, '%price_cents%'),
         )
         observations: list[PriceObservation] = []
-        for item_id, created_at, object_changes in legacy.fetchall():
-            if not Offer.objects.filter(pk=item_id).exists():
+        for price_point_id, created_at, object_changes in legacy.fetchall():
+            offer_id = price_point_to_offer.get(price_point_id)
+            if offer_id is None:
+                continue  # PricePoint deleted; offer no longer findable
+            if not Offer.objects.filter(pk=offer_id).exists():
                 continue
             changes = object_changes if isinstance(object_changes, dict) else \
                 json.loads(object_changes or '{}')
             change = changes.get('price_cents')
             if not change:
                 continue
-            # change format from paper_trail: [old_value, new_value]
+            # paper_trail object_changes format: [old_value, new_value]
             new_price = change[1] if len(change) > 1 else change[0]
             if not isinstance(new_price, int) or new_price < 0:
                 continue
             observations.append(PriceObservation(
-                offer_id=item_id,
+                offer_id=offer_id,
                 price_cents=new_price,
                 price_currency='EUR',
                 observed_at=created_at,

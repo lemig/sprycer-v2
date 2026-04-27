@@ -1,17 +1,21 @@
 """Stream-extract the operational subset of the 137 GB legacy Sprycer dump.
 
 The legacy production dump (~137 GB plain SQL) is too large to load whole.
-~95% of it is paper_trail.versions (full JSON snapshots of every Offer change
+~95% of it is paper_trail.versions (full JSON snapshots of every change
 across 14 years) and scraps (raw HTML cached per scrape). v2 doesn't need
 either at full scale.
 
-This script does ONE pass over the dump (~7-10 minutes wall clock on SSD)
+This script does ONE pass over the dump (~2-3 minutes wall clock on SSD)
 and writes per-table extracts to an output directory. For most tables the
-COPY data is copied verbatim. For `versions` it filters per-row to keep only
-the rows v2 actually backfills (Tension C + TODO #7):
-  - item_type = 'Offer'
+COPY data is copied verbatim. For `versions` it filters per-row to keep
+only the rows v2 actually backfills (Tension C + TODO #7):
+  - item_type = 'PricePoint'  (legacy puts the price column on the
+    PricePoint model, not Offer; paper_trail logs price changes there)
   - created_at within the last 12 months
   - object_changes JSON contains 'price_cents'
+
+The migrate_legacy command resolves PricePoint.id -> Offer.id via the
+price_points table during migration.
 
 Skipped entirely (huge + irrelevant to v2):
   - scraps, version_associations, crawls, settings, schema_migrations,
@@ -265,7 +269,7 @@ def main() -> int:
                             n <= state['idx_created_at'] or
                             n <= state['idx_object_changes']):
                         continue
-                    if fields[state['idx_item_type']] != 'Offer':
+                    if fields[state['idx_item_type']] != 'PricePoint':
                         continue
                     obj_changes = fields[state['idx_object_changes']]
                     if 'price_cents' not in obj_changes:
