@@ -84,8 +84,11 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--legacy-url', required=True,
                             help='Postgres connection string for the loaded legacy DB.')
-        parser.add_argument('--user-recency-days', type=int, default=90,
-                            help='Only seed users active within N days (TODO #3).')
+        parser.add_argument('--user-recency-days', type=int, default=0,
+                            help='If > 0, only seed users with last_sign_in_at '
+                                 'within N days. Default 0 = migrate all users '
+                                 '(legacy has only 10 rows; Devise last_sign_in_at '
+                                 'predates 90d for most active session-cookie users).')
         parser.add_argument('--history-months', type=int, default=12,
                             help='Backfill versions price changes from last N months.')
         parser.add_argument('--dry-run', action='store_true',
@@ -197,12 +200,17 @@ class Command(BaseCommand):
         return mapping
 
     def _migrate_users(self, legacy, recency_days: int):
-        cutoff = timezone.now() - timedelta(days=recency_days)
-        legacy.execute(
-            "SELECT id, email, last_sign_in_at "
-            "FROM users WHERE last_sign_in_at >= %s ORDER BY id",
-            (cutoff,),
-        )
+        if recency_days > 0:
+            cutoff = timezone.now() - timedelta(days=recency_days)
+            legacy.execute(
+                "SELECT id, email, last_sign_in_at "
+                "FROM users WHERE last_sign_in_at >= %s ORDER BY id",
+                (cutoff,),
+            )
+        else:
+            legacy.execute(
+                "SELECT id, email, last_sign_in_at FROM users ORDER BY id"
+            )
         mapping: dict[int, int] = {}
         for legacy_id, email, last_sign_in_at in legacy.fetchall():
             if not email:
