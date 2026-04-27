@@ -27,3 +27,7 @@ staticfiles/
 # IDE
 .idea/
 .vscode/
+
+# H17 migration: extracted legacy data + transient DB files
+.legacy_extract/
+.legacy_pg_data/
