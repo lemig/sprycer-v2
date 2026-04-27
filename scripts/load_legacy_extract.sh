@@ -78,6 +78,8 @@ echo
 echo "Legacy DB ready:"
 echo "  postgres://postgres:${PASSWORD}@localhost:${PORT}/${DB}"
 echo
-echo "Next: run the v2 migration"
-echo "  uv run python manage.py migrate_legacy \\"
-echo "    --legacy-url postgres://postgres:${PASSWORD}@localhost:${PORT}/${DB}"
+echo "Next: dry-run the v2 migration first (rolls back at the end)"
+echo "  uv run python manage.py migrate_legacy --dry-run --legacy-url postgres://postgres:${PASSWORD}@localhost:${PORT}/${DB}"
+echo
+echo "If the dry-run counters look right, drop --dry-run to commit:"
+echo "  uv run python manage.py migrate_legacy --legacy-url postgres://postgres:${PASSWORD}@localhost:${PORT}/${DB}"
