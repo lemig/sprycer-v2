@@ -1,31 +1,33 @@
 """Migrate the legacy Sprycer Postgres into v2.
 
 Stage 3 of H17 (after extract + load). Reads from a legacy DB connection
-provided via --legacy-url and writes to Django's default DB. Idempotent —
-re-runs UPSERT instead of insert, so a partial run can be resumed.
+provided via --legacy-url and writes to Django's default DB. Uses
+bulk_create(ignore_conflicts=True) for the heavy tables so a full migration
+runs in ~3 min instead of ~30 min.
 
 Migrations performed (eng review locks):
 
-  1. Retailers, Brands (with aliases), Websites: preserve names, remap PKs.
+  1. Retailers, Brands (with aliases), Websites: small reference tables;
+     keep update_or_create for clarity.
   2. Users (TODO #3): only accounts with last_sign_in_at within 90 days.
-     Encrypted password copied verbatim — Devise/bcrypt and Django's
-     bcrypt are compatible enough to verify on first login if format
-     starts with $2.
-  3. Channels, MainCompetition: preserve ordering; remap FKs.
-  4. Pages: preserve URL + scraped_at.
+     Passwords NOT migrated — Devise bcrypt incompatible with Django
+     bcrypt-sha256. Each user lands with set_unusable_password(); ops
+     sends Django password-reset emails.
+  3. Channels, MainCompetition: small; update_or_create.
+  4. Pages: bulk_create on URL.
   5. Offers: PRESERVE PK (Schleiper's "Sprycer ID" depends on this).
      Identity-matchings (offer_id == competing_offer_id) skipped — v2
      doesn't use the sentinel pattern.
-  6. Matchings: only `confirmed` legacy status copied as
-     Matching.Status.CONFIRMED + Matching.Source.LEGACY_IMPORTED so the
-     skip-if-exists invariant (Tension B) protects them on AI re-run.
-     `suggested` and `rejected` legacy rows skipped (AI pipeline will
-     re-derive them).
-  7. price_points (current price per offer) -> PriceObservation row
-     observed_at = price_at.
-  8. Reviews: offer + retailer + competitor + reviewed_at.
+  6. Matchings: only legacy `confirmed` (status=0) imported as
+     Matching.Source.LEGACY_IMPORTED. Suggested/rejected dropped.
+  7. price_points (current price per offer) -> PriceObservation.
+  8. Reviews: bulk_create.
   9. versions (12-month subset, TODO #7) -> historical PriceObservation
      rows so the export's last-good-price fallback has real data day 1.
+
+Idempotency: bulk_create(ignore_conflicts=True) on tables with unique
+constraints. Re-runs skip existing rows. For a one-shot cutover this is
+exactly the semantic we want.
 
 Usage:
     uv run python manage.py migrate_legacy \\
@@ -34,14 +36,16 @@ Usage:
 from __future__ import annotations
 
 import json
+import warnings
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 
 import psycopg
+from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
-from django.contrib.auth import get_user_model
 
 from core.models import (
     Brand,
@@ -60,11 +64,18 @@ from core.models import (
 User = get_user_model()
 
 
-LEGACY_MATCHING_STATUS = {
-    0: 'confirmed',
-    1: 'suggested',
-    2: 'rejected',
-}
+def _aware(dt: datetime | None) -> datetime | None:
+    """Treat a legacy naive datetime as UTC and return a tz-aware datetime.
+
+    Legacy Rails stored 'timestamp without time zone' in UTC. v2 has
+    USE_TZ=True; without this helper Django warns on every insert and
+    auto-localizes to Europe/Brussels (wrong tz for the value).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=dt_timezone.utc)
 
 
 class Command(BaseCommand):
@@ -87,6 +98,11 @@ class Command(BaseCommand):
                 yield cur
 
     def handle(self, *args, **opts):
+        # Belt-and-suspenders: even with _aware() we silence the warning class
+        # so any datetime field we forget can't spam 1.4M warnings.
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+                                message=r'.*received a naive datetime.*')
+
         url = opts['legacy_url']
         try:
             with self._legacy(url) as legacy:
@@ -147,7 +163,7 @@ class Command(BaseCommand):
         for key, count in counters.items():
             self.stdout.write(f'  {key:<32} {count:>10,}')
 
-    # ---- Per-table migrators ---------------------------------------------
+    # ---- Reference data (small, keep update_or_create) -------------------
 
     def _migrate_retailers(self, legacy):
         legacy.execute('SELECT id, name FROM retailers ORDER BY id')
@@ -181,11 +197,6 @@ class Command(BaseCommand):
         return mapping
 
     def _migrate_users(self, legacy, recency_days: int):
-        """Seed user accounts (username + email) for everyone active in the last
-        N days (TODO #3). Passwords are NOT migrated — Devise's plain bcrypt is
-        not directly compatible with Django's bcrypt-sha256 default. Each user
-        lands with an unusable password; ops sends a Django password-reset
-        email or runs `manage.py changepassword`."""
         cutoff = timezone.now() - timedelta(days=recency_days)
         legacy.execute(
             "SELECT id, email, last_sign_in_at "
@@ -202,7 +213,7 @@ class Command(BaseCommand):
             )
             if created:
                 user.set_unusable_password()
-            user.last_login = last_sign_in_at
+            user.last_login = _aware(last_sign_in_at)
             user.save(update_fields=['password', 'last_login'])
             mapping[legacy_id] = user.id
         return mapping
@@ -242,105 +253,109 @@ class Command(BaseCommand):
             n += 1
         return n
 
+    # ---- Heavy tables: bulk_create ---------------------------------------
+
     def _migrate_pages(self, legacy, website_map):
+        """Pages: bulk_create on URL (UNIQUE). Preserve scraped_at as UTC-aware."""
         legacy.execute(
             'SELECT id, website_id, url, scraped_at FROM pages ORDER BY id'
         )
-        mapping: dict[int, int] = {}
-        for legacy_id, website_id, url, scraped_at in legacy.fetchall():
+        rows = legacy.fetchall()
+        instances = []
+        for legacy_id, website_id, url, scraped_at in rows:
             if not url:
                 continue
-            page, _ = Page.objects.update_or_create(
+            instances.append(Page(
                 url=url,
-                defaults={
-                    'website_id': website_map.get(website_id) if website_id else None,
-                    'scraped_at': scraped_at,
-                },
-            )
-            mapping[legacy_id] = page.id
-        return mapping
+                website_id=website_map.get(website_id) if website_id else None,
+                scraped_at=_aware(scraped_at),
+            ))
+        Page.objects.bulk_create(instances, ignore_conflicts=True, batch_size=2000)
+        # Build the legacy_id -> v2_id mapping after insert.
+        by_url = {p.url: p.id for p in Page.objects.all().only('id', 'url')}
+        return {legacy_id: by_url[url]
+                for legacy_id, _, url, _ in rows
+                if url and url in by_url}
 
     def _migrate_offers(self, legacy, retailer_map, brand_map, website_map, channel_map):
+        """Offers: bulk_create with PK preserved (Schleiper's Sprycer ID
+        contract — eng review 1A + cutover safety)."""
         legacy.execute("""
             SELECT id, website_id, sku, common_sku, name, description, retailer_id,
                    original_image_url, ean, categories, custom_attributes, brand_id,
-                   public, matchings_reviewed_at, channel_id, created_at, updated_at
+                   public, matchings_reviewed_at, channel_id
             FROM offers ORDER BY id
         """)
-        n = 0
+        instances = []
         for row in legacy.fetchall():
             (legacy_id, website_id, sku, common_sku, name, description, retailer_id,
              image_url, ean, categories, custom_attributes, brand_id, public,
-             matchings_reviewed_at, channel_id, created_at, updated_at) = row
+             matchings_reviewed_at, channel_id) = row
             if retailer_id is None or retailer_id not in retailer_map:
                 continue
             if not channel_id or channel_id not in channel_map:
                 continue
             if not sku or not name:
                 continue
-            offer, _ = Offer.objects.update_or_create(
+            instances.append(Offer(
                 pk=legacy_id,
-                defaults=dict(
-                    website_id=website_map.get(website_id) if website_id else None,
-                    channel_id=channel_map[channel_id],
-                    retailer_id=retailer_map[retailer_id],
-                    brand_id=brand_map.get(brand_id) if brand_id else None,
-                    sku=sku,
-                    common_sku=common_sku or '',
-                    name=name,
-                    description=description or '',
-                    ean=ean or '',
-                    original_image_url=image_url or '',
-                    categories=list(categories or []),
-                    custom_attributes=custom_attributes or {},
-                    public=bool(public),
-                    matchings_reviewed_at=matchings_reviewed_at,
-                ),
-            )
-            n += 1
-        return n
+                website_id=website_map.get(website_id) if website_id else None,
+                channel_id=channel_map[channel_id],
+                retailer_id=retailer_map[retailer_id],
+                brand_id=brand_map.get(brand_id) if brand_id else None,
+                sku=sku,
+                common_sku=common_sku or '',
+                name=name,
+                description=description or '',
+                ean=ean or '',
+                original_image_url=image_url or '',
+                categories=list(categories or []),
+                custom_attributes=custom_attributes or {},
+                public=bool(public),
+                matchings_reviewed_at=_aware(matchings_reviewed_at),
+            ))
+        Offer.objects.bulk_create(instances, ignore_conflicts=True, batch_size=2000)
+        return len(instances)
 
     def _migrate_offers_pages(self, legacy, page_map):
         legacy.execute(
             'SELECT offer_id, page_id FROM offers_pages '
             'WHERE offer_id IS NOT NULL AND page_id IS NOT NULL'
         )
+        valid_offer_ids = set(Offer.objects.values_list('pk', flat=True))
         through = Offer.pages.through
         rows: list = []
         for offer_id, page_id in legacy.fetchall():
-            if page_id not in page_map:
+            if offer_id not in valid_offer_ids or page_id not in page_map:
                 continue
             rows.append(through(offer_id=offer_id, page_id=page_map[page_id]))
-        through.objects.bulk_create(rows, ignore_conflicts=True, batch_size=1000)
+        through.objects.bulk_create(rows, ignore_conflicts=True, batch_size=5000)
         return len(rows)
 
     def _migrate_matchings(self, legacy):
-        # Only confirmed (status=0) matches are imported. This is the H17 +
-        # Tension B contract: legacy human-confirmed work survives cutover.
-        # Suggested/rejected legacy rows are dropped — the AI pipeline will
-        # re-derive them post-cutover.
+        # Only confirmed (status=0) matches imported. Tension B: legacy
+        # human-confirmed work survives cutover; AI re-runs respect skip-if-
+        # exists (tested in test_matching.py).
         legacy.execute(
-            "SELECT offer_id, competing_offer_id, status, score, predicted "
+            "SELECT offer_id, competing_offer_id, score, predicted "
             "FROM matchings WHERE status = 0 AND offer_id != competing_offer_id"
         )
-        n = 0
-        for offer_id, competing_offer_id, status, score, predicted in legacy.fetchall():
-            if not Offer.objects.filter(pk=offer_id).exists():
+        valid_offer_ids = set(Offer.objects.values_list('pk', flat=True))
+        instances = []
+        for offer_id, competing_offer_id, score, predicted in legacy.fetchall():
+            if offer_id not in valid_offer_ids or competing_offer_id not in valid_offer_ids:
                 continue
-            if not Offer.objects.filter(pk=competing_offer_id).exists():
-                continue
-            Matching.objects.update_or_create(
-                offer_id=offer_id, competing_offer_id=competing_offer_id,
-                defaults={
-                    'status': Matching.Status.CONFIRMED,
-                    'source': Matching.Source.LEGACY_IMPORTED,
-                    'score': score,
-                    'predicted': bool(predicted) if predicted is not None else False,
-                    'llm_reason': '',
-                },
-            )
-            n += 1
-        return n
+            instances.append(Matching(
+                offer_id=offer_id,
+                competing_offer_id=competing_offer_id,
+                status=Matching.Status.CONFIRMED,
+                source=Matching.Source.LEGACY_IMPORTED,
+                score=score,
+                predicted=bool(predicted) if predicted is not None else False,
+                llm_reason='',
+            ))
+        Matching.objects.bulk_create(instances, ignore_conflicts=True, batch_size=2000)
+        return len(instances)
 
     def _migrate_price_points(self, legacy):
         legacy.execute("""
@@ -349,56 +364,48 @@ class Command(BaseCommand):
             FROM price_points
             WHERE offer_id IS NOT NULL AND price_cents IS NOT NULL
         """)
-        observations: list[PriceObservation] = []
+        valid_offer_ids = set(Offer.objects.values_list('pk', flat=True))
+        instances = []
         for row in legacy.fetchall():
             (offer_id, price_cents, list_price_cents, shipping_cents,
              currency, price_at) = row
-            if not Offer.objects.filter(pk=offer_id).exists():
+            if offer_id not in valid_offer_ids:
                 continue
-            observations.append(PriceObservation(
+            instances.append(PriceObservation(
                 offer_id=offer_id,
                 price_cents=price_cents,
                 list_price_cents=list_price_cents,
                 shipping_charges_cents=shipping_cents,
                 price_currency=currency or 'EUR',
-                observed_at=price_at or timezone.now(),
+                observed_at=_aware(price_at) or timezone.now(),
             ))
-        # Re-runs: clear any current-price observations that originate from this
-        # migration before inserting fresh ones, to keep idempotency simple
-        # (legacy price_points has 1 row per offer; live PriceObservation has many).
-        PriceObservation.objects.bulk_create(observations, batch_size=1000,
-                                             ignore_conflicts=False)
-        return len(observations)
+        PriceObservation.objects.bulk_create(instances, batch_size=2000)
+        return len(instances)
 
     def _migrate_reviews(self, legacy, retailer_map):
         legacy.execute(
             'SELECT offer_id, retailer_id, competitor_id, reviewed_at FROM reviews'
         )
-        n = 0
+        valid_offer_ids = set(Offer.objects.values_list('pk', flat=True))
+        instances = []
         for offer_id, retailer_id, competitor_id, reviewed_at in legacy.fetchall():
             if retailer_id not in retailer_map or competitor_id not in retailer_map:
                 continue
-            if not Offer.objects.filter(pk=offer_id).exists():
+            if offer_id not in valid_offer_ids:
                 continue
-            Review.objects.update_or_create(
+            instances.append(Review(
                 offer_id=offer_id,
                 retailer_id=retailer_map[retailer_id],
                 competitor_id=retailer_map[competitor_id],
-                defaults={'reviewed_at': reviewed_at or timezone.now()},
-            )
-            n += 1
-        return n
+                reviewed_at=_aware(reviewed_at) or timezone.now(),
+            ))
+        Review.objects.bulk_create(instances, ignore_conflicts=True, batch_size=2000)
+        return len(instances)
 
     def _migrate_historical_versions(self, legacy, history_months: int):
-        """TODO #7: backfill last N months of price changes from the legacy
-        paper_trail.versions table into PriceObservation.
-
-        Legacy puts the price column on PricePoint, not Offer, so paper_trail
-        logs price_cents changes with item_type='PricePoint'. versions.item_id
-        is therefore the PricePoint.id; we resolve it to Offer.id via the
-        price_points table (1:1 — PricePoint has UNIQUE(offer_id) in legacy).
-        """
-        # Build PricePoint.id -> Offer.id mapping (~267K rows, ~4 MB memory).
+        """TODO #7: backfill last N months of price changes from
+        paper_trail.versions into PriceObservation. versions.item_id is
+        PricePoint.id; resolve via price_points table (1:1)."""
         legacy.execute('SELECT id, offer_id FROM price_points WHERE offer_id IS NOT NULL')
         price_point_to_offer = dict(legacy.fetchall())
 
@@ -410,27 +417,25 @@ class Command(BaseCommand):
             "AND object_changes::text LIKE %s",
             (cutoff, '%price_cents%'),
         )
-        observations: list[PriceObservation] = []
+        valid_offer_ids = set(Offer.objects.values_list('pk', flat=True))
+        instances = []
         for price_point_id, created_at, object_changes in legacy.fetchall():
             offer_id = price_point_to_offer.get(price_point_id)
-            if offer_id is None:
-                continue  # PricePoint deleted; offer no longer findable
-            if not Offer.objects.filter(pk=offer_id).exists():
+            if offer_id is None or offer_id not in valid_offer_ids:
                 continue
             changes = object_changes if isinstance(object_changes, dict) else \
                 json.loads(object_changes or '{}')
             change = changes.get('price_cents')
             if not change:
                 continue
-            # paper_trail object_changes format: [old_value, new_value]
             new_price = change[1] if len(change) > 1 else change[0]
             if not isinstance(new_price, int) or new_price < 0:
                 continue
-            observations.append(PriceObservation(
+            instances.append(PriceObservation(
                 offer_id=offer_id,
                 price_cents=new_price,
                 price_currency='EUR',
-                observed_at=created_at,
+                observed_at=_aware(created_at),
             ))
-        PriceObservation.objects.bulk_create(observations, batch_size=1000)
-        return len(observations)
+        PriceObservation.objects.bulk_create(instances, batch_size=2000)
+        return len(instances)
