@@ -60,6 +60,30 @@ Twelve core models in `core/models.py`: `Offer`, `Matching` (self-referential),
 
 ---
 
+## What the client sees in the browser
+
+Sprycer is a web app. The client logs in at `/accounts/login/` (existing legacy credentials
+work after `migrate_legacy`) and uses these pages:
+
+| URL | What it does |
+|-----|--------------|
+| `/imports` | List of catalog uploads with status, uploader, row counts |
+| `/imports/new` | Upload the weekly Excel/CSV catalog. Same form shape as legacy. |
+| `/imports/<id>` | One upload's detail — success/failure, per-row errors |
+| `/exports` | List of generated exports |
+| `/exports/new` | Pick retailer + format (CSV/XLSX), generate the export they email |
+| `/matchings` | AI-suggested match review with HTMX confirm/reject. **The UX upgrade vs the legacy fuzzy-match UI.** |
+| `/admin` | Django admin — for the operator, not the client |
+
+`templates/layouts/base.html` keeps the Sprycer-red header from the legacy app so existing
+bookmarks and muscle memory survive cutover (Tension A from the eng review — URL/auth/UI
+parity was a hard requirement).
+
+The management commands below are **operations tooling** the operator (or scheduled
+machines) runs on the server. The client never opens a terminal.
+
+---
+
 ## Dev quickstart
 
 Requires Python 3.12+, [`uv`](https://docs.astral.sh/uv/), and a local Postgres with the
