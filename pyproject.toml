@@ -1,6 +1,6 @@
 [project]
 name = "sprycer"
-version = "0.1.0"
+version = "0.1.0.0"
 requires-python = ">=3.12"
 dependencies = [
     "django>=5.1,<5.2",

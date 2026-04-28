@@ -52,7 +52,7 @@ against live production data.
 - Operational management commands: `process_imports`, `generate_export`,
   `scrape`, `seed_pages`, `embed_offers`, `run_matching`, `verify_pgvector`,
   `migrate_legacy`.
-- 207-test suite: importer transforms + golden-file, exporter byte
+- 208-test suite: importer transforms + golden-file, exporter byte
   precision, money formatter (incl. `€1,234.56` thousands), Géant + R&P
   parsers, scrape runner with NULL-`scraped_at` regression coverage,
   embedding pipeline retry logic, AI matching with the four Tension B
