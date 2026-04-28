@@ -240,8 +240,14 @@ def render_rows_for_retailer(retailer: Retailer):
     main_competitor_ids = [mc.competitor_id for mc in main_competitions]
     headers = export_headers(retailer)
 
+    # Legacy export semantics (verified against user-provided exports.csv:
+    # 21,760 of 21,760 rows have Public=false): exports show ALL offers for
+    # the retailer regardless of public flag. Schleiper imports default to
+    # public=False (Rails t.boolean default + no explicit setter in the
+    # SchleiperImporter); only competitor scrape results land as public=True.
+    # Filtering would empty the Schleiper export entirely.
     offers_qs = (
-        Offer.objects.filter(retailer=retailer, public=True)
+        Offer.objects.filter(retailer=retailer)
         .select_related('channel', 'retailer')
         .prefetch_related(
             'reviews',
