@@ -243,11 +243,9 @@ def _persist_row(fields: _OfferFields, ctx: _SchleiperContext) -> Offer:
             observed_at=fields.price_at or timezone.now(),
         )
 
-    # Best-effort re-embed when name/description changed. Returns False silently
-    # if OPENAI_API_KEY is unset (dev/test) or the API call failed — backfill
-    # cron will pick those up.
-    embed_offer(offer)
-
+    # NOTE: embed_offer() is invoked by the caller AFTER the import transaction
+    # commits, not here. Calling OpenAI inside a 22K-row @transaction.atomic
+    # would hold DB locks open for the duration of every embed RPC.
     return offer
 
 
@@ -284,32 +282,41 @@ class SchleiperImporter:
         # Excel (.xls / .xlsx)
         return pd.read_excel(path, header=0, dtype=object)
 
-    @transaction.atomic
     def run(self, import_obj: Import) -> ImportResult:
-        """Process the file referenced by import_obj inside a single transaction
-        (Tension C). Per-row failures are captured in failure_info and the loop
-        continues; the transaction commits at the end regardless of failure
-        count, mirroring legacy SchleiperImporter behavior."""
+        """Process the file referenced by import_obj. The DB writes happen
+        inside a single transaction (Tension C: half-imports never become
+        visible to exports). Embedding RPCs run AFTER the transaction commits
+        so a slow OpenAI call cannot hold DB locks open across all 22K rows.
+        Per-row failures are captured in failure_info and the loop continues."""
         ctx = _bootstrap_schleiper_context()
         result = ImportResult()
+        offers_to_embed: list[Offer] = []
 
-        rows = list(self.parse(import_obj.file.path))
-        result.total = len(rows)
+        with transaction.atomic():
+            rows = list(self.parse(import_obj.file.path))
+            result.total = len(rows)
 
-        for index, row in enumerate(rows, start=2):  # 1-based, +1 for header row
-            try:
-                fields = transform_row(row)
-                _persist_row(fields, ctx)
-            except Exception as exc:
-                result.failures += 1
-                # Match legacy Import.formated_failure_info shape: 'N: message'.
-                result.failure_info.append(f'{index}: {type(exc).__name__}: {exc}')
+            for index, row in enumerate(rows, start=2):  # 1-based, +1 for header row
+                try:
+                    fields = transform_row(row)
+                    offer = _persist_row(fields, ctx)
+                    offers_to_embed.append(offer)
+                except Exception as exc:
+                    result.failures += 1
+                    # Match legacy Import.formated_failure_info shape: 'N: message'.
+                    result.failure_info.append(f'{index}: {type(exc).__name__}: {exc}')
 
-        import_obj.total = result.total
-        import_obj.failures = result.failures
-        import_obj.pending = 0
-        import_obj.failure_info = result.failure_info
-        import_obj.status = Import.Status.COMPLETED
-        import_obj.save(update_fields=['total', 'failures', 'pending', 'failure_info', 'status', 'updated_at'])
+            import_obj.total = result.total
+            import_obj.failures = result.failures
+            import_obj.pending = 0
+            import_obj.failure_info = result.failure_info
+            import_obj.status = Import.Status.COMPLETED
+            import_obj.save(update_fields=['total', 'failures', 'pending', 'failure_info', 'status', 'updated_at'])
+
+        # Embeddings run AFTER commit — no DB lock held during OpenAI RPCs.
+        # Each call is best-effort; failures are picked up by the embed_offers
+        # backfill cron next run.
+        for offer in offers_to_embed:
+            embed_offer(offer)
 
         return result

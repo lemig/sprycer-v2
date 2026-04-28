@@ -35,10 +35,12 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
   docker rm -f "$CONTAINER" >/dev/null
 fi
 echo "Starting Postgres 16 on port ${PORT} as ${CONTAINER}..."
+# Bind to 127.0.0.1 only — this DB holds a snapshot of legacy production data
+# and must never be reachable from the network.
 docker run --name "$CONTAINER" \
   -e POSTGRES_PASSWORD="$PASSWORD" \
   -e POSTGRES_DB="$DB" \
-  -p "${PORT}:5432" \
+  -p "127.0.0.1:${PORT}:5432" \
   -d postgres:16 >/dev/null
 
 # 2. Wait for it to accept connections.

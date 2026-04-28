@@ -31,3 +31,4 @@ staticfiles/
 # H17 migration: extracted legacy data + transient DB files
 .legacy_extract/
 .legacy_pg_data/
+.gstack/

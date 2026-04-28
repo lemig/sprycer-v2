@@ -5,9 +5,23 @@ from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-dev-only-replace-in-prod')
-DEBUG = config('DEBUG', default=True, cast=bool)
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
+DEBUG = config('DEBUG', default=False, cast=bool)
+# Dev fallback only when DEBUG=True. Prod (DEBUG=False) must set SECRET_KEY
+# explicitly — silently shipping the dev fallback is the kind of bug that
+# leaks in someone's commit history and stays.
+SECRET_KEY = config(
+    'SECRET_KEY',
+    default='django-insecure-dev-only-replace-in-prod' if DEBUG else '',
+)
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('SECRET_KEY must be set when DEBUG=False.')
+# Same shape: '*' is dev-only. Prod requires an explicit host list.
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='localhost,127.0.0.1' if DEBUG else '',
+    cast=Csv(),
+)
 
 INSTALLED_APPS = [
     'django.contrib.admin',

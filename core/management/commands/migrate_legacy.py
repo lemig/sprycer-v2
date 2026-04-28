@@ -230,14 +230,21 @@ class Command(BaseCommand):
         for legacy_id, email, last_sign_in_at in legacy.fetchall():
             if not email:
                 continue
+            # is_staff defaults to False — migrated Schleiper users access
+            # /imports + /exports + /matchings (login_required only). Django
+            # admin (/admin/) stays locked down to whoever Miguel grants
+            # is_staff/is_superuser to via `manage.py changepassword` or shell.
             user, created = User.objects.update_or_create(
                 username=email,
-                defaults={'email': email, 'is_staff': True},
+                defaults={'email': email, 'is_staff': False},
             )
             if created:
                 user.set_unusable_password()
-            user.last_login = _aware(last_sign_in_at)
-            user.save(update_fields=['password', 'last_login'])
+                user.last_login = _aware(last_sign_in_at)
+                user.save(update_fields=['password', 'last_login'])
+            else:
+                user.last_login = _aware(last_sign_in_at)
+                user.save(update_fields=['last_login'])
             mapping[legacy_id] = user.id
         return mapping
 

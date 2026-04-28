@@ -27,6 +27,7 @@ runner code is unchanged.
 from __future__ import annotations
 
 import re
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -113,7 +114,11 @@ def parse(html: str | bytes, page_url: str = '') -> list[ParsedOffer]:
     image_url = ''
     img = product_scope.find('img', attrs={'itemprop': 'image'})
     if img is not None:
-        image_url = img.get('src', '')
+        raw_src = img.get('src', '')
+        # R&P emits relative paths (e.g. '/phproduct/.../P_141980_P_1.jpg').
+        # Resolve against the page URL so Offer.original_image_url is a full
+        # URL the export consumer can fetch / the match-review UI can render.
+        image_url = urljoin(page_url, raw_src) if raw_src else ''
 
     return [ParsedOffer(
         sku=sku,

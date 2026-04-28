@@ -23,6 +23,7 @@ from datetime import timedelta
 from urllib.parse import urlparse
 
 import httpx
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -90,30 +91,41 @@ def _ttc_to_ht_cents(ttc_cents: int, vat_rate: float) -> int:
 
 def _persist_offers(parsed: list[ParsedOffer], page: Page, ctx: _Context, vat_rate: float) -> int:
     """UPSERT each parsed offer + create a fresh PriceObservation row. Returns
-    the number of offers written."""
+    the number of offers written.
+
+    Each offer is wrapped in transaction.atomic so a mid-loop failure leaves a
+    coherent per-offer state (offer + page link + price observation either all
+    written or all rolled back). The OpenAI embed_offer() call is invoked AFTER
+    the transaction commits so a slow API can't hold DB locks open.
+    """
     written = 0
+    new_offers: list[Offer] = []
     for p in parsed:
-        offer, _ = Offer.objects.update_or_create(
-            website=ctx.website, sku=p.sku, public=True,
-            defaults=dict(
-                retailer=ctx.retailer,
-                channel=ctx.channel,
-                name=p.name,
-                ean=p.ean,
-                original_image_url=p.image_url,
-            ),
-        )
-        offer.pages.add(page)
-        PriceObservation.objects.create(
-            offer=offer,
-            price_cents=_ttc_to_ht_cents(p.price_cents, vat_rate),
-            price_currency=p.price_currency,
-            observed_at=timezone.now(),
-        )
-        # Best-effort re-embed when name/description changed (no-op without
-        # OPENAI_API_KEY). Pipeline tolerates failure — backfill picks up later.
-        embed_offer(offer)
+        with transaction.atomic():
+            offer, _ = Offer.objects.update_or_create(
+                website=ctx.website, sku=p.sku, public=True,
+                defaults=dict(
+                    retailer=ctx.retailer,
+                    channel=ctx.channel,
+                    name=p.name,
+                    ean=p.ean,
+                    original_image_url=p.image_url,
+                ),
+            )
+            offer.pages.add(page)
+            PriceObservation.objects.create(
+                offer=offer,
+                price_cents=_ttc_to_ht_cents(p.price_cents, vat_rate),
+                price_currency=p.price_currency,
+                observed_at=timezone.now(),
+            )
+        new_offers.append(offer)
         written += 1
+    # Embedding runs OUTSIDE the per-offer transaction. Best-effort; no-op if
+    # OPENAI_API_KEY unset; transient failures get retried by the embed_offers
+    # backfill cron.
+    for offer in new_offers:
+        embed_offer(offer)
     return written
 
 
