@@ -157,11 +157,22 @@ Two helper scripts live in `scripts/`:
 v2 runs on Fly.io at `sprycer-v2.fly.dev` (region: `ams`). The first deploy is a one-time
 setup; redeploys after that are `fly deploy`.
 
+**Install the CLI first.** ⚠️ `brew install fly` installs **Concourse CI's** `fly`, not
+Fly.io's. Same binary name, completely different tool. The right install:
+
+```bash
+brew install flyctl
+# or the official installer:
+#   curl -L https://fly.io/install.sh | sh
+fly version       # should report fly.io's CLI
+fly auth login    # one-time
+```
+
 **First-time setup:**
 
 ```bash
 # Create the app + Neon DB out-of-band, then:
-fly launch --no-deploy --name sprycer-v2 --region ams --copy-config
+fly launch --no-deploy --copy-config --name sprycer-v2
 
 # Set runtime secrets. Values are NOT committed to the repo.
 fly secrets set \
