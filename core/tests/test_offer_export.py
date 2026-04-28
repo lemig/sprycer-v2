@@ -305,7 +305,9 @@ class TestXlsxRoundtrip:
         )
         PriceObservation.objects.create(offer=offer, price_cents=298)
 
-        headers, row_iter = render_rows_for_retailer(sch)
+        # competing_offers_only=False so the default Schleiper filter (only
+        # offers with confirmed matchings) doesn't drop the lone test offer.
+        headers, row_iter = render_rows_for_retailer(sch, competing_offers_only=False)
         out, count = to_xlsx_bytes(headers, row_iter)
         assert count == 1
 

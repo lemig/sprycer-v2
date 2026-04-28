@@ -34,7 +34,7 @@ from dataclasses import dataclass
 
 from openpyxl import Workbook
 
-from ..models import Export, Offer, PriceObservation, Retailer
+from ..models import Export, Matching, Offer, PriceObservation, Retailer
 from ..money import format_euro
 
 
@@ -232,8 +232,16 @@ def _build_row(
     return row
 
 
-def render_rows_for_retailer(retailer: Retailer):
-    """Yield (headers, row_dict_iter) for the given retailer's public offers."""
+def render_rows_for_retailer(retailer: Retailer, *, competing_offers_only: bool = True):
+    """Yield (headers, row_dict_iter) for the given retailer's offers.
+
+    competing_offers_only=True (default) mirrors Schleiper's standard export
+    filter visible in the legacy /offers UI as `competing_offers=any`. Verified
+    against legacy: Schleiper retailer alone has ~66K offers; with the
+    "any competing offer" filter the count drops to ~21,760, matching every
+    recent legacy export (568, 565, 564, 563, 561, 548 in production).
+    Setting this to False yields all retailer offers — useful for ops + audit.
+    """
     main_competitions = list(
         retailer.main_competitions.order_by('position').select_related('competitor')
     )
@@ -245,9 +253,14 @@ def render_rows_for_retailer(retailer: Retailer):
     # the retailer regardless of public flag. Schleiper imports default to
     # public=False (Rails t.boolean default + no explicit setter in the
     # SchleiperImporter); only competitor scrape results land as public=True.
-    # Filtering would empty the Schleiper export entirely.
+    # Filtering on public would empty the Schleiper export entirely.
+    offers_qs = Offer.objects.filter(retailer=retailer)
+    if competing_offers_only:
+        offers_qs = offers_qs.filter(
+            matchings__status=Matching.Status.CONFIRMED
+        ).distinct()
     offers_qs = (
-        Offer.objects.filter(retailer=retailer)
+        offers_qs
         .select_related('channel', 'retailer')
         .prefetch_related(
             'reviews',
@@ -321,12 +334,16 @@ def _xlsx_cell(value):
 # ---- Wired entry point used by /admin export action / CLI -------------
 
 
-def generate_offer_export(export_obj: Export, retailer: Retailer, fmt: str = 'csv') -> Export:
+def generate_offer_export(export_obj: Export, retailer: Retailer, fmt: str = 'csv',
+                          *, competing_offers_only: bool = True) -> Export:
     """Populate export_obj.file with a rendered export of retailer's offers.
 
     fmt = 'csv' or 'xlsx'. Uses the legacy filename pattern export_{id}.{ext}.
+    competing_offers_only=True matches Schleiper's standard legacy filter.
     """
-    headers, rows = render_rows_for_retailer(retailer)
+    headers, rows = render_rows_for_retailer(
+        retailer, competing_offers_only=competing_offers_only
+    )
     if fmt == 'csv':
         payload, count = to_csv_bytes(headers, rows)
         ext = 'csv'

@@ -189,6 +189,14 @@ class TestMatchingsHtmx:
 @pytest.mark.django_db
 class TestExportEndToEnd:
     def test_post_creates_export_with_file(self, client_in, world):
+        # The default export filter only includes offers with at least one
+        # confirmed Matching. Add one so the test offer survives the filter.
+        from core.models import Matching
+        Matching.objects.create(
+            offer=world['sch_offer'], competing_offer=world['rp_offer'],
+            status=Matching.Status.CONFIRMED,
+            source=Matching.Source.LEGACY_IMPORTED,
+        )
         r = client_in.post('/exports/new', {
             'retailer_id': world['sch'].pk, 'format': 'csv',
         })

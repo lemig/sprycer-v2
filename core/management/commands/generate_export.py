@@ -24,6 +24,12 @@ class Command(BaseCommand):
         parser.add_argument('--user', default=None,
                             help='Username to attribute the export to '
                                  '(default: first superuser).')
+        parser.add_argument('--all-offers', action='store_true',
+                            help='Include all retailer offers (legacy-equivalent: '
+                                 'no competing_offers filter). Default behavior '
+                                 'matches Schleiper standard filter '
+                                 '(competing_offers=any) — only offers with at '
+                                 'least one confirmed Matching.')
 
     def handle(self, *args, **opts):
         try:
@@ -43,7 +49,10 @@ class Command(BaseCommand):
                 raise CommandError('No superuser exists. Pass --user explicitly.')
 
         export = Export.objects.create(user=user, model=Export.Model.OFFER, count=0)
-        generate_offer_export(export, retailer, fmt=opts['format'])
+        generate_offer_export(
+            export, retailer, fmt=opts['format'],
+            competing_offers_only=not opts['all_offers'],
+        )
         self.stdout.write(self.style.SUCCESS(
             f'Export #{export.pk} ({export.count} rows) -> {export.file.name}'
         ))
