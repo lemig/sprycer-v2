@@ -267,6 +267,14 @@ class PriceObservation(models.Model):
         indexes = [
             models.Index(fields=['offer', '-observed_at'], name='price_obs_offer_recent_idx'),
         ]
+        constraints = [
+            # Gates migrate_legacy rerun (nightly sync during parallel run)
+            # and any future write path from appending duplicate rows.
+            models.UniqueConstraint(
+                fields=['offer', 'observed_at', 'price_cents'],
+                name='unique_price_observation',
+            ),
+        ]
 
     def __str__(self) -> str:
         cents = self.price_cents / 100
