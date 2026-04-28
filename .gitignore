@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Django
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# H17 migration: extracted legacy data + transient DB files
+.legacy_extract/
+.legacy_pg_data/
+.gstack/
+
+# Claude Code session state
+.claude/

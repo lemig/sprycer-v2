@@ -1,0 +1,29 @@
+{% extends "layouts/base.html" %}
+{% block title %}Listing exports{% endblock %}
+{% block content %}
+<h1>Listing exports</h1>
+<div class="toolbar">
+  <a href="{% url 'exports:new' %}" class="btn btn-primary">New export</a>
+</div>
+{% if exports %}
+<table>
+  <thead><tr>
+    <th>ID</th><th>User</th><th>Model</th><th>Created at</th><th>Records</th><th>File</th>
+  </tr></thead>
+  <tbody>
+    {% for ex in exports %}
+    <tr>
+      <td>{{ ex.id }}</td>
+      <td>{{ ex.user.email|default:ex.user.username }}</td>
+      <td>{{ ex.model }}</td>
+      <td>{{ ex.created_at|date:"M j, Y H:i" }}</td>
+      <td>{{ ex.count }}</td>
+      <td>{% if ex.file %}<a href="{{ ex.file.url }}">{{ ex.file.name|cut:"exports/" }}</a>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No exports yet. <a href="{% url 'exports:new' %}">Generate your first export</a>.</div>
+{% endif %}
+{% endblock %}

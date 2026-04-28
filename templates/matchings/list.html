@@ -1,0 +1,23 @@
+{% extends "layouts/base.html" %}
+{% block title %}Match review{% endblock %}
+{% block content %}
+<h1>Match review — Suggested ({{ total }})</h1>
+<form method="get" class="toolbar">
+  <input type="text" name="q" value="{{ q }}" placeholder="search by SKU or URL"
+    >
+  <select name="order">
+    <option value="score-desc"  {% if order == "score-desc" %}selected{% endif %}>Score: high → low</option>
+    <option value="score-asc"   {% if order == "score-asc"  %}selected{% endif %}>Score: low → high</option>
+    <option value="name-asc"    {% if order == "name-asc"   %}selected{% endif %}>Name: A → Z</option>
+    <option value="name-desc"   {% if order == "name-desc"  %}selected{% endif %}>Name: Z → A</option>
+  </select>
+  <button class="btn">Apply</button>
+</form>
+{% if matchings %}
+<div id="match-list">
+  {% for m in matchings %}{% include "matchings/_card.html" with m=m %}{% endfor %}
+</div>
+{% else %}
+<div class="empty">No suggested matchings. AI pipeline may not have run yet, or all suggestions have been reviewed.</div>
+{% endif %}
+{% endblock %}

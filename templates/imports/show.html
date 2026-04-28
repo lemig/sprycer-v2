@@ -1,0 +1,27 @@
+{% extends "layouts/base.html" %}
+{% block title %}Import #{{ import.id }}{% endblock %}
+{% block content %}
+<h1>Import #{{ import.id }}</h1>
+<table>
+  <tr><th>Status</th><td>{{ import.status }}</td></tr>
+  <tr><th>User</th><td>{{ import.user.email|default:import.user.username }}</td></tr>
+  <tr><th>Model</th><td>{{ import.importer_class_name }}</td></tr>
+  <tr><th>Created at</th><td>{{ import.created_at|date:"M j, Y H:i" }}</td></tr>
+  <tr><th>File</th><td>{{ import.file.name }}</td></tr>
+  <tr><th>Total</th><td>{{ import.total }}</td></tr>
+  <tr><th>Pending</th><td>{{ import.pending }}</td></tr>
+  <tr><th>Failures</th><td>{{ import.failures }}</td></tr>
+</table>
+{% if import.failure_info %}
+<h2 style="margin-top:24px;font-size:16px;">Failure info</h2>
+<table>
+  <thead><tr><th>Row</th><th>Message</th></tr></thead>
+  <tbody>
+    {% for line in import.failure_info %}<tr><td colspan="2"><code>{{ line }}</code></td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<div class="toolbar" style="margin-top:24px;">
+  <a href="{% url 'imports:list' %}" class="btn">Back to imports</a>
+</div>
+{% endblock %}

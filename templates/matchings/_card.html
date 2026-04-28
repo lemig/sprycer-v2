@@ -1,0 +1,33 @@
+{% load static %}
+<div id="matching-{{ m.id }}" class="card" style="margin-bottom:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <div style="font-size:13px;color:#666;">
+      Matching #{{ m.id }} • score
+      {% if m.score is not None %}{{ m.score|floatformat:2 }}{% else %}—{% endif %}
+      • status <strong>{{ m.status }}</strong>
+    </div>
+    <div>
+      <button class="btn btn-primary" hx-post="{% url 'matchings:confirm' m.id %}" hx-target="#matching-{{ m.id }}" hx-swap="outerHTML" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>Confirm</button>
+      <button class="btn" hx-post="{% url 'matchings:reject' m.id %}" hx-target="#matching-{{ m.id }}" hx-swap="outerHTML" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>Reject</button>
+    </div>
+  </div>
+  <div class="grid-2">
+    <div>
+      <div class="sku">{{ m.offer.retailer.name }} • {{ m.offer.sku }}</div>
+      <div><strong>{{ m.offer.name }}</strong></div>
+      {% with latest=m.offer.price_observations.first %}
+      {% if latest %}<div class="price">{{ latest.price_cents|stringformat:"d"|slice:":-2" }}.{{ latest.price_cents|stringformat:"d"|slice:"-2:" }} {{ latest.price_currency }}</div>{% endif %}
+      {% endwith %}
+      {% if m.offer.original_image_url %}<img src="{{ m.offer.original_image_url }}" alt="" style="max-width:100%;max-height:140px;margin-top:8px;">{% endif %}
+    </div>
+    <div>
+      <div class="sku">{{ m.competing_offer.retailer.name }} • {{ m.competing_offer.sku }}</div>
+      <div><strong>{{ m.competing_offer.name }}</strong></div>
+      {% with latest=m.competing_offer.price_observations.first %}
+      {% if latest %}<div class="price">{{ latest.price_cents|stringformat:"d"|slice:":-2" }}.{{ latest.price_cents|stringformat:"d"|slice:"-2:" }} {{ latest.price_currency }}</div>{% endif %}
+      {% endwith %}
+      {% if m.competing_offer.original_image_url %}<img src="{{ m.competing_offer.original_image_url }}" alt="" style="max-width:100%;max-height:140px;margin-top:8px;">{% endif %}
+    </div>
+  </div>
+  {% if m.llm_reason %}<div style="margin-top:8px;font-size:12px;color:#888;font-style:italic;">{{ m.llm_reason }}</div>{% endif %}
+</div>

@@ -1,0 +1,32 @@
+{% extends "layouts/base.html" %}
+{% block title %}Listing imports{% endblock %}
+{% block content %}
+<h1>Listing imports</h1>
+<div class="toolbar">
+  <a href="{% url 'imports:new' %}" class="btn btn-primary">New import</a>
+</div>
+{% if imports %}
+<table>
+  <thead><tr>
+    <th>ID</th><th>User</th><th>Model</th><th>Created at</th><th>Status</th><th>Total</th><th>Pending</th><th>Failures</th><th></th>
+  </tr></thead>
+  <tbody>
+    {% for imp in imports %}
+    <tr>
+      <td>{{ imp.id }}</td>
+      <td>{{ imp.user.email|default:imp.user.username }}</td>
+      <td>{{ imp.importer_class_name }}</td>
+      <td>{{ imp.created_at|date:"M j, Y H:i" }}</td>
+      <td>{{ imp.status }}</td>
+      <td>{{ imp.total }}</td>
+      <td>{{ imp.pending }}</td>
+      <td>{{ imp.failures }}</td>
+      <td><a href="{% url 'imports:show' imp.id %}" class="btn">Show</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No imports yet. <a href="{% url 'imports:new' %}">Upload your first catalog</a>.</div>
+{% endif %}
+{% endblock %}
