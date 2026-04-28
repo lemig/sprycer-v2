@@ -32,3 +32,6 @@ staticfiles/
 .legacy_extract/
 .legacy_pg_data/
 .gstack/
+
+# Claude Code session state
+.claude/
