@@ -4,6 +4,48 @@ Items deferred from PLAN.md and the 2026-04-26 `/plan-eng-review` session.
 Format: skill/component group, then priority (P0 top → P4 bottom), then
 Completed at the bottom.
 
+## Parallel run (replaces silent cutover)
+
+Strategy shift on 2026-04-28: instead of a single silent DNS swap, v2 runs
+alongside legacy at `sprycer-v2.fly.dev` for ~1 month while Schleiper's user
+verifies parity. Real cutover is the trailing event after parity is confirmed,
+not the gating one.
+
+Decisions locked:
+- **v2 URL:** `sprycer-v2.fly.dev` (Fly default, no DNS work).
+- **Sync:** legacy → v2 nightly only, read-only on legacy DB.
+- **Scrape ownership during parallel:** legacy keeps scraping. v2's scheduled
+  scrape machines stay disabled — avoids doubling traffic to Géant/R&P.
+
+**Nightly sync scheduled machine**
+- **Priority:** P0 (gates the parallel run)
+- **What:** Fly cron runs `manage.py migrate_legacy --legacy-url <legacy-conn>`
+  every night against the live legacy Cloud 66 Postgres. Read-only on legacy
+  side; writes new offers + matchings + reviews + price points to v2's Neon
+  DB. v2 also runs `embed_offers --only-missing` + `run_matching` after the
+  sync completes, so new legacy offers get matches by morning.
+- **Why:** Schleiper continues their normal workflow on legacy. v2 mirrors
+  state automatically — no double-upload friction.
+- **Depends on:** the rerun-dedup fix (now Completed below).
+- **Where:** `fly.toml` schedule entry, no code change beyond the existing
+  `migrate_legacy` command.
+
+**Schleiper user comms**
+- **Priority:** P1
+- **What:** 2-paragraph email to the user: "we built a new version, log into
+  `sprycer-v2.fly.dev` with your existing credentials, here's what's new
+  (the matchings UX), here's what to verify (export should match what you see
+  on legacy)." Plus a verification cadence (weekly diff for first month).
+- **Why:** parallel run only works if the user actually opens v2.
+
+**Verification dashboard**
+- **Priority:** P2 (post-deploy, week 1 of parallel)
+- **What:** an admin-only `/parity` view that shows the latest export diff
+  between legacy and v2 — row counts, byte-diff sample on a handful of SKUs,
+  drift over time. One URL Schleiper's user (and Miguel) opens daily during
+  the parallel month.
+- **Where:** new `core/views.py` route, new template.
+
 ## Cutover
 
 **12-month versions backfill (TODO #7 from eng review)**
@@ -82,6 +124,25 @@ Completed at the bottom.
   an eval is "fake precision."
 - **How:** seed from legacy. Track precision and recall on every prompt
   change. Block CI on regressions below baseline.
+
+**Sitemap-driven product discovery**
+- **Priority:** P2 (post-cutover, week 2+)
+- **What:** walk the Géant + R&P XML sitemaps once a month, diff against
+  `Page.url`, queue net-new URLs into the existing scrape pipeline. Closes
+  the closed-set limitation: today the matcher can only suggest competitors
+  it already scraped, so a Schleiper SKU whose competitor URL was never
+  seeded gets an empty Competitor N cell in the export — same gap the
+  legacy app had.
+- **Why:** Schleiper adds new SKUs continuously. The legacy URL master
+  list (`urls.csv`) drifted stale. Sitemap crawl + existing
+  `embed_offers` + `run_matching` chain auto-fills the missing matches
+  with no human input. Pairs naturally with H18 scheduled machines.
+- **How:** new `core/scrapers/sitemap.py` (parse `/sitemap.xml` or
+  `/sitemap_index.xml`, return `list[str]` of product URLs), new
+  `discover_pages` management command. Schedule monthly. Embedding cost
+  for first run is ~$5 at `text-embedding-3-small` pricing for ~50K
+  new offers per host; recurring runs only embed the delta.
+- **Where:** `core/scrapers/sitemap.py`, `core/management/commands/discover_pages.py`.
 
 **R&P variant page handling**
 - **Priority:** P3
@@ -167,16 +228,6 @@ becomes a real risk once H18 wires Fly scheduled machines that may overlap.
 - **Where:** `core/matching.py:177`.
 - **Fix:** exclude `ERRORED` from the skip check, or add a retry-after timestamp.
 
-**migrate_legacy rerun duplicates**
-- **Priority:** P1 (before any cutover-day rerun)
-- **What:** the migration claims idempotency, but `_migrate_price_points` and
-  `_migrate_historical_versions` use `bulk_create` without a conflict key.
-  Re-running silently appends duplicate `PriceObservation` rows.
-- **Where:** `core/management/commands/migrate_legacy.py:390`.
-- **Fix:** add a stable uniqueness key on `PriceObservation` (e.g.
-  `(offer_id, observed_at, price_cents)`), or `TRUNCATE` the table before
-  reinserting in a transaction.
-
 **Matching direction (export visibility)**
 - **Priority:** P1 (cutover risk if legacy data has reverse-direction pairs)
 - **What:** `_competing_slots` walks `offer.matchings` only. A Matching stored
@@ -209,4 +260,10 @@ becomes a real risk once H18 wires Fly scheduled machines that may overlap.
 
 ## Completed
 
-(Empty — this is the first version. v0.1.0.0 is the initial release.)
+**migrate_legacy rerun duplicates** — promoted to P0 when parallel-run strategy
+required nightly sync. Fixed: added `UniqueConstraint(offer, observed_at,
+price_cents)` to `PriceObservation` (migration `0003`), switched both
+`bulk_create` sites in `migrate_legacy.py` to `ignore_conflicts=True`. Five
+regression tests in `core/tests/test_migrate_legacy.py` cover model-level
+constraint enforcement, idempotent rerun, new-rows-from-legacy detection, and
+orphan skipping.

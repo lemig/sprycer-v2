@@ -409,7 +409,9 @@ class Command(BaseCommand):
                 price_currency=currency or 'EUR',
                 observed_at=_aware(price_at) or timezone.now(),
             ))
-        PriceObservation.objects.bulk_create(instances, batch_size=2000)
+        PriceObservation.objects.bulk_create(
+            instances, ignore_conflicts=True, batch_size=2000,
+        )
         return len(instances)
 
     def _migrate_reviews(self, legacy, retailer_map):
@@ -467,5 +469,7 @@ class Command(BaseCommand):
                 price_currency='EUR',
                 observed_at=_aware(created_at),
             ))
-        PriceObservation.objects.bulk_create(instances, batch_size=2000)
+        PriceObservation.objects.bulk_create(
+            instances, ignore_conflicts=True, batch_size=2000,
+        )
         return len(instances)
