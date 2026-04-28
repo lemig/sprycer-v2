@@ -89,8 +89,19 @@ class Command(BaseCommand):
                                  'within N days. Default 0 = migrate all users '
                                  '(legacy has only 10 rows; Devise last_sign_in_at '
                                  'predates 90d for most active session-cookie users).')
-        parser.add_argument('--history-months', type=int, default=12,
-                            help='Backfill versions price changes from last N months.')
+        parser.add_argument('--history-months', type=int, default=0,
+                            help='If > 0, backfill versions price changes from '
+                                 'last N months as PriceObservation rows. Default '
+                                 '0 = skip (TODO #7 deferred post-cutover). The '
+                                 'versions paper_trail rows have only price_cents '
+                                 'in object_changes, NOT list_price_cents — '
+                                 'creating PriceObservations from them yields '
+                                 'rows with list_price=NULL that, being more '
+                                 'recent than the price_points snapshot, take '
+                                 'over in `latest_observation` queries and '
+                                 'corrupt the export. To restore TODO #7 '
+                                 "properly, route versions data into a separate "
+                                 'PriceHistory model that the export ignores.')
         parser.add_argument('--dry-run', action='store_true',
                             help='Roll back the whole migration at the end.')
 
@@ -150,13 +161,17 @@ class Command(BaseCommand):
                 self.stdout.write('Migrating reviews...')
                 counters['reviews'] = self._migrate_reviews(legacy, retailer_map)
 
-                self.stdout.write(
-                    f'Backfilling {opts["history_months"]} months of price history '
-                    f'from versions...'
-                )
-                counters['price_observations_historical'] = (
-                    self._migrate_historical_versions(legacy, opts['history_months'])
-                )
+                if opts['history_months'] > 0:
+                    self.stdout.write(
+                        f'Backfilling {opts["history_months"]} months of price '
+                        f'history from versions (will yield rows with '
+                        f'list_price=NULL — see --history-months help)...'
+                    )
+                    counters['price_observations_historical'] = (
+                        self._migrate_historical_versions(legacy, opts['history_months'])
+                    )
+                else:
+                    counters['price_observations_historical'] = 0
 
             if opts['dry_run']:
                 self.stdout.write(self.style.WARNING('--dry-run: rolling back'))
