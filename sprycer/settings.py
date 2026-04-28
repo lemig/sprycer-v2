@@ -35,6 +35,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Whitenoise serves staticfiles directly from the app, so we don't need a
+    # CDN or separate static server for the Django admin CSS / login page.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -92,9 +95,42 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 MEDIA_URL = 'media/'
 MEDIA_ROOT = config('MEDIA_ROOT', default=str(BASE_DIR / 'media'))
+
+# Fly terminates TLS at the edge; Django sees plain HTTP from the proxy.
+# Without this, request.is_secure() returns False and Django would emit
+# http:// links + reject the CSRF cookie on POSTs from the HTTPS site.
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='' if not DEBUG else 'http://localhost:8000,http://127.0.0.1:8000',
+    cast=Csv(),
+)
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # Fly's edge already redirects HTTP→HTTPS via fly.toml force_https=true,
+    # but SECURE_SSL_REDIRECT closes the gap if Fly is ever swapped for a
+    # proxy that doesn't enforce HTTPS at the edge. Healthz must stay HTTP-
+    # callable from inside the machine for the probe to work.
+    SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r'^healthz$']
+    # HSTS: tell browsers to remember the HTTPS-only choice for a year, on
+    # all subdomains. Single-tenant internal tool, always HTTPS via Fly —
+    # the lock-in risk doesn't apply.
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

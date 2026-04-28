@@ -1,0 +1,45 @@
+# Fly.io app config for Sprycer v2.
+# Deploy: `fly deploy`. Secrets: `fly secrets set KEY=value` (see README Deploy).
+# Scheduled machines (embed_offers / run_matching / process_imports) are not
+# configured here — they're created via `fly machine run --schedule` after the
+# first deploy. See README "Operational scheduling".
+
+app = "sprycer-v2"
+primary_region = "ams"  # Amsterdam — closest Fly region to Belgium
+
+[build]
+
+[env]
+  # Non-secret runtime config. Anything sensitive lives in `fly secrets`.
+  PORT = "8000"
+  DEBUG = "False"
+  ALLOWED_HOSTS = "sprycer-v2.fly.dev"
+  CSRF_TRUSTED_ORIGINS = "https://sprycer-v2.fly.dev"
+  POSTGRES_SSLMODE = "require"
+
+[deploy]
+  # Run migrations before swapping in the new release. Failed migration =
+  # failed deploy = old version stays serving traffic.
+  release_command = "python manage.py migrate --noinput"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+  # 512 MB is enough for Django + gunicorn (2 workers) at this scale.
+  # Bump to 1024 if Schleiper's user reports OOMs during big exports.

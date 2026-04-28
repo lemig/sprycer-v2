@@ -12,6 +12,8 @@ dependencies = [
     "httpx>=0.28",
     "beautifulsoup4>=4.13",
     "openai>=1.50",
+    "gunicorn>=23.0",
+    "whitenoise>=6.7",
 ]
 
 [dependency-groups]

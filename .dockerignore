@@ -1,0 +1,38 @@
+# Files that don't belong in the Fly image.
+# Keeps the image small + cuts iterative build time.
+.git
+.gitignore
+.gstack
+.claude
+.context
+.legacy_extract
+.legacy_pg_data
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.DS_Store
+
+# Local DB + media — production state lives in Neon + Fly volumes.
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# Local secrets — Fly secrets are the source of truth in production.
+.env
+.env.local
+.env.*.local
+
+# Docs aren't needed at runtime.
+PLAN.md
+TODOS.md
+CHANGELOG.md
+README.md
+
+# IDE
+.idea
+.vscode

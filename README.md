@@ -122,7 +122,7 @@ Open `http://127.0.0.1:8000/` and log in. URLs: `/imports`, `/exports`, `/matchi
 Run the test suite:
 
 ```bash
-uv run pytest          # 208 tests, ~5s
+uv run pytest          # 215 tests, ~4s
 uv run pytest -k offer_export   # one file
 ```
 
@@ -152,40 +152,114 @@ Two helper scripts live in `scripts/`:
 
 ---
 
-## Cutover runbook
+## Deploy (Fly.io)
 
-The cutover is silent: legacy stays up, v2 takes over without Schleiper noticing. The export
-they email weekly must match the legacy export byte-for-byte on structural columns. Sequence:
+v2 runs on Fly.io at `sprycer-v2.fly.dev` (region: `ams`). The first deploy is a one-time
+setup; redeploys after that are `fly deploy`.
 
-1. **Take a fresh dump** of the live legacy Postgres on cutover morning.
-2. **Extract the operational subset:**
+**First-time setup:**
+
+```bash
+# Create the app + Neon DB out-of-band, then:
+fly launch --no-deploy --name sprycer-v2 --region ams --copy-config
+
+# Set runtime secrets. Values are NOT committed to the repo.
+fly secrets set \
+  SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+  POSTGRES_HOST="ep-...neon.tech" \
+  POSTGRES_DB="sprycer" \
+  POSTGRES_USER="sprycer" \
+  POSTGRES_PASSWORD="..." \
+  OPENAI_API_KEY="sk-..." \
+  SLACK_WEBHOOK_URL="https://hooks.slack.com/..."
+
+# First deploy. release_command runs migrations before swap.
+fly deploy
+
+# Create the first superuser via SSH.
+fly ssh console -C "python manage.py createsuperuser"
+```
+
+`fly.toml` already pins `ALLOWED_HOSTS=sprycer-v2.fly.dev`, `CSRF_TRUSTED_ORIGINS=https://sprycer-v2.fly.dev`,
+`POSTGRES_SSLMODE=require`, and `DEBUG=False` as non-secret env. Whitenoise serves staticfiles
+from inside the app — no CDN needed for the Django admin CSS.
+
+**Operational scheduling.** Three scheduled machines run periodic work. Create them once
+after first deploy:
+
+```bash
+# Hourly: embed any newly-arrived offers (from imports or sync) so matching can use them.
+fly machine run --schedule hourly --region ams \
+  registry.fly.io/sprycer-v2:latest \
+  /app/.venv/bin/python manage.py embed_offers --only-missing
+
+# Every 6 hours: AI matching pipeline runs against newly-embedded offers.
+fly machine run --schedule "0 */6 * * *" --region ams \
+  registry.fly.io/sprycer-v2:latest \
+  /app/.venv/bin/python manage.py run_matching
+
+# Every 10 min: drain catalog uploads queued from /imports/new.
+fly machine run --schedule "*/10 * * * *" --region ams \
+  registry.fly.io/sprycer-v2:latest \
+  /app/.venv/bin/python manage.py process_imports
+```
+
+Scrape scheduled machines stay disabled during the parallel run (legacy keeps scraping —
+avoids doubling traffic to Géant/R&P).
+
+**Redeploy:**
+
+```bash
+fly deploy
+```
+
+---
+
+## On-demand legacy sync (laptop → Neon)
+
+During the parallel-run month, v2 mirrors legacy state via a laptop-driven sync run on
+demand (weekly or whenever you want fresh data in v2). Same toolchain rehearsed against
+the 137 GB production dump, just pointed at Neon instead of a local v2 DB. **Read-only on
+the legacy side.**
+
+1. **Configure `.env`** (one-time) so `manage.py` writes to Neon:
+   ```
+   POSTGRES_HOST=ep-...neon.tech
+   POSTGRES_DB=sprycer
+   POSTGRES_USER=sprycer
+   POSTGRES_PASSWORD=...
+   POSTGRES_SSLMODE=require
+   ```
+2. **Take a fresh Postgres dump** from the legacy Cloud 66 box (your usual `pg_dump`).
+3. **Extract the operational subset:**
    ```bash
    uv run python scripts/extract_legacy_dump.py /path/to/legacy.sql .legacy_extract/
    ```
-   Streams ~137 GB once, writes per-table CSVs, filters `versions` to PricePoint+price_cents
-   rows. ~2–3 min wall clock on SSD.
-3. **Load into a transient Postgres:**
+   Streams ~137 GB once, writes per-table CSVs, filters `versions` to PricePoint rows.
+   ~2–3 min on SSD.
+4. **Load into a transient local Docker Postgres** (staging area; never touched by Schleiper):
    ```bash
    bash scripts/load_legacy_extract.sh .legacy_extract/
    ```
-   Spins up Docker Postgres on `127.0.0.1:5433` (network-isolated). Loads in ~3 min.
-4. **Migrate into v2:**
+   Postgres on `127.0.0.1:5433`, network-isolated. ~3 min.
+5. **Migrate into Neon:**
    ```bash
    uv run python manage.py migrate_legacy \
      --legacy-url postgres://postgres:legacypw@localhost:5433/sprycer_legacy
    ```
-   Migrates retailers, websites, channels, brands, offers, pages, matchings, reviews, users.
-   `--history-months 0` by default (TODO #7 deferred — see `TODOS.md`).
-5. **Generate v2 export and diff against a fresh legacy export:**
+   Idempotent: rerunning is safe (unique constraint on PriceObservation, `ignore_conflicts=True`
+   on bulk inserts). New legacy rows land in Neon with `embedding=NULL`. Fly's hourly
+   `embed_offers --only-missing` cron picks them up; matching follows ~6 hours later.
+6. **(optional) Force embedding + matching now** instead of waiting for the next cron tick:
+   ```bash
+   fly ssh console -C "python manage.py embed_offers --only-missing && python manage.py run_matching"
+   ```
+7. **Generate v2 export and diff against a fresh legacy export** as the parity check
+   Schleiper's user runs:
    ```bash
    uv run python manage.py generate_export --retailer Schleiper --format csv > v2.csv
    diff <(sort legacy.csv) <(sort v2.csv)
    ```
-   With no time gap between the dumps, the diff should be empty on structural columns. The
-   5-day-old rehearsal showed 18,572 of 21,760 rows byte-identical (15% delta = documented
-   data drift).
-6. **DNS swap.** Active sessions briefly see "site moved" during propagation. Schedule for 2am
-   Belgian time.
 
 ---
 
