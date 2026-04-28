@@ -13,22 +13,16 @@ not the gating one.
 
 Decisions locked:
 - **v2 URL:** `sprycer-v2.fly.dev` (Fly default, no DNS work).
-- **Sync:** legacy → v2 nightly only, read-only on legacy DB.
-- **Scrape ownership during parallel:** legacy keeps scraping. v2's scheduled
-  scrape machines stay disabled — avoids doubling traffic to Géant/R&P.
-
-**Nightly sync scheduled machine**
-- **Priority:** P0 (gates the parallel run)
-- **What:** Fly cron runs `manage.py migrate_legacy --legacy-url <legacy-conn>`
-  every night against the live legacy Cloud 66 Postgres. Read-only on legacy
-  side; writes new offers + matchings + reviews + price points to v2's Neon
-  DB. v2 also runs `embed_offers --only-missing` + `run_matching` after the
-  sync completes, so new legacy offers get matches by morning.
-- **Why:** Schleiper continues their normal workflow on legacy. v2 mirrors
-  state automatically — no double-upload friction.
-- **Depends on:** the rerun-dedup fix (now Completed below).
-- **Where:** `fly.toml` schedule entry, no code change beyond the existing
-  `migrate_legacy` command.
+- **v2 database:** Neon Launch (~$19/mo). pgvector built-in, branching, the
+  migration rehearsal already runs against it.
+- **Sync model:** on-demand from laptop. Miguel runs the dump → extract →
+  load → `migrate_legacy` chain when he wants fresh data in v2. Read-only
+  on legacy. Cloud 66 creds never leave the laptop.
+- **Operational work:** runs on Fly via scheduled machines (`embed_offers
+  --only-missing` hourly, `run_matching` every 6h, `process_imports` every
+  10 min). Laptop is for sync only; Fly handles continuous operations.
+- **Scrape ownership during parallel:** legacy keeps scraping. v2's scrape
+  scheduled machines stay disabled — avoids doubling traffic to Géant/R&P.
 
 **Schleiper user comms**
 - **Priority:** P1
@@ -93,23 +87,24 @@ Decisions locked:
 - **Where:** `scripts/extract_legacy_dump.py`, `scripts/load_legacy_extract.sh`,
   `manage.py migrate_legacy`.
 
-## Deploy (H18)
+## Deploy (H18 follow-ups)
 
-**Fly.io deploy configs**
+**First production deploy + scheduled machines bootstrap**
 - **Priority:** P0
-- **What:** Dockerfile, fly.toml, Fly Managed Postgres setup, scheduled machines
-  for `scrape --queue`, `process_imports --watch`, `embed_offers --only-missing`,
-  `run_matching` post-scrape. Secrets list (`SECRET_KEY`, `OPENAI_API_KEY`,
-  `SLACK_WEBHOOK_URL`, all `POSTGRES_*`).
-- **Why:** v0.1.0.0 ships the code + tests + migration tooling; H18 of the
-  original plan was deploy. Out of scope for this PR.
-- **Where:** new top-level `Dockerfile`, `fly.toml`.
+- **What:** run `fly launch --copy-config` once, set the secrets list (see
+  README "Deploy"), `fly deploy`, create the first superuser, then create
+  the three scheduled machines (`embed_offers --only-missing` hourly,
+  `run_matching` every 6h, `process_imports` every 10 min).
+- **Why:** the configs ship in this PR; the actual deploy is a one-time
+  CLI sequence Miguel runs against his Fly account.
+- **Where:** runbook in README, not code.
 
-**DNS swap UX**
-- **Priority:** P2
-- **What:** active Schleiper sessions during DNS propagation will see "site
-  moved" briefly. Communicate the cutover window or schedule it at 2am
-  Belgian time.
+**DNS swap UX (post-parallel cutover)**
+- **Priority:** P3 (was P2, demoted because parallel run replaces the
+  silent-cutover model — DNS swap is a controlled trailing event after
+  Schleiper's user has verified parity)
+- **What:** when ready to cut over, point `sprycer.com` from Cloud 66 to
+  Fly. Active sessions briefly see "site moved" during propagation.
 - **Where:** runbook, not code.
 
 ## Matching pipeline

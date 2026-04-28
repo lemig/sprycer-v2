@@ -206,3 +206,19 @@ class TestExportEndToEnd:
         ex = Export.objects.latest('created_at')
         assert ex.file
         assert ex.count >= 1
+
+
+@pytest.mark.django_db
+class TestHealthz:
+    """Fly health probe. Unauthenticated, DB-pinging, plain-text response."""
+
+    def test_healthy_when_db_reachable(self, client):
+        r = client.get('/healthz')
+        assert r.status_code == 200
+        assert r.content == b'ok'
+
+    def test_no_login_required(self, client):
+        # Probe runs without credentials. If we accidentally login_required'd
+        # this, Fly would always see 302 and never know the app was healthy.
+        r = client.get('/healthz')
+        assert r.status_code != 302

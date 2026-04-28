@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -20,6 +20,25 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from .exporters import generate_offer_export
 from .models import Export, Import, Matching, Retailer, Review
+
+
+# ---- /healthz (Fly probe) ---------------------------------------------
+
+
+def healthz(request):
+    """Liveness + readiness probe for Fly's health check.
+
+    Pings the DB so an unreachable Neon flips the machine to unhealthy and
+    Fly holds traffic until ready. Unauthenticated by design — Fly's probe
+    has no credentials, and the response carries no sensitive data.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except Exception as exc:
+        return HttpResponse(f'unhealthy: {exc.__class__.__name__}', status=503)
+    return HttpResponse('ok')
 
 
 # ---- /imports ----------------------------------------------------------
