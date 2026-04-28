@@ -44,8 +44,13 @@ class Command(BaseCommand):
         except Retailer.DoesNotExist:
             raise CommandError(f"Retailer not found: {opts['retailer']!r}")
 
-        offers = Offer.objects.filter(retailer=retailer, public=True,
-                                      embedding__isnull=False).order_by('id')
+        # public is intentionally NOT filtered: migrated Schleiper rows preserve
+        # legacy `public=False`. Filtering on public=True would make this command
+        # process zero offers on cutover day. Match candidacy is gated on
+        # embedding presence + retailer membership only.
+        offers = Offer.objects.filter(
+            retailer=retailer, embedding__isnull=False
+        ).order_by('id')
         totals = run_matching_for_queryset(offers, k=opts['k'])
         self.stdout.write(self.style.SUCCESS(
             f'retailer={retailer.name} processed={totals["offers_processed"]} '

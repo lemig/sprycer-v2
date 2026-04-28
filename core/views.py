@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Q
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
 from .exporters import generate_offer_export
-from .models import Export, Import, Matching, Retailer
+from .models import Export, Import, Matching, Retailer, Review
 
 
 # ---- /imports ----------------------------------------------------------
@@ -127,17 +130,53 @@ def matchings_list(request):
 @login_required
 @require_POST
 def matchings_confirm(request, matching_id: int):
+    """Human confirms an AI-suggested matching.
+
+    State machine: only SUGGESTED rows can transition. CONFIRMED/REJECTED rows
+    return 409 — protects legacy-imported and previously-reviewed matchings
+    from being overwritten by a direct POST.
+
+    Side effects (atomic with the status transition):
+      - Upsert a Review(offer, retailer, competitor) row stamped with now —
+        this is what flips the export's "Reviewed" column. Without it,
+        confirming a matching would change the Competitor N cells but leave
+        "Competitors offers not yet reviewed" stuck on the row.
+      - Stamp `offer.matchings_reviewed_at` for legacy parity.
+    """
     m = get_object_or_404(Matching, pk=matching_id)
-    m.status = Matching.Status.CONFIRMED
-    m.source = Matching.Source.HUMAN_CONFIRMED
-    m.save(update_fields=['status', 'source', 'updated_at'])
+    if m.status != Matching.Status.SUGGESTED:
+        return HttpResponse(
+            f'Matching #{m.pk} is already {m.status} — cannot transition.',
+            status=409,
+        )
+    with transaction.atomic():
+        m.status = Matching.Status.CONFIRMED
+        m.source = Matching.Source.HUMAN_CONFIRMED
+        m.save(update_fields=['status', 'source', 'updated_at'])
+        Review.objects.update_or_create(
+            offer=m.offer,
+            retailer_id=m.offer.retailer_id,
+            competitor_id=m.competing_offer.retailer_id,
+            defaults={'reviewed_at': timezone.now()},
+        )
+        m.offer.matchings_reviewed_at = timezone.now()
+        m.offer.save(update_fields=['matchings_reviewed_at', 'updated_at'])
     return render(request, 'matchings/_card_resolved.html', {'m': m})
 
 
 @login_required
 @require_POST
 def matchings_reject(request, matching_id: int):
+    """Human rejects an AI-suggested matching. Same state-machine guard as
+    confirm. No Review row written — rejection means "not the same product",
+    which is not equivalent to "I reviewed this competitor's pricing."
+    """
     m = get_object_or_404(Matching, pk=matching_id)
+    if m.status != Matching.Status.SUGGESTED:
+        return HttpResponse(
+            f'Matching #{m.pk} is already {m.status} — cannot transition.',
+            status=409,
+        )
     m.status = Matching.Status.REJECTED
     m.source = Matching.Source.HUMAN_REJECTED
     m.save(update_fields=['status', 'source', 'updated_at'])

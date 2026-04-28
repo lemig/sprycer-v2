@@ -201,6 +201,18 @@ def _persist_row(fields: _OfferFields, ctx: _SchleiperContext) -> Offer:
     channel = ctx.channel_express if fields.is_express else ctx.channel_online
     brand = Brand.find_or_create_by_name_or_alias(fields.brand_name) if fields.brand_name else None
 
+    # Skip Deleted=true rows entirely — legacy `:delete` virtual attribute
+    # destroys the Offer; v2 mirror is "do not write the row." Keeps the
+    # imported catalog aligned with what Schleiper considers active.
+    if fields.is_deleted:
+        return None
+
+    # Schleiper imports always land as public=False (legacy Rails t.boolean
+    # default + no explicit setter in legacy SchleiperImporter). The export
+    # contract shows ALL Schleiper offers regardless of public flag — verified
+    # against live legacy export (21,760/21,760 rows are public=false). Setting
+    # public=True here would flip the byte-identity of the Public column on
+    # every row of the first post-cutover import.
     base_attrs = dict(
         retailer=ctx.retailer,
         website=ctx.website,
@@ -212,7 +224,7 @@ def _persist_row(fields: _OfferFields, ctx: _SchleiperContext) -> Offer:
         ean=fields.ean,
         original_image_url=fields.original_image_url,
         categories=fields.categories,
-        public=not fields.is_deleted,
+        public=False,
     )
 
     offer: Offer | None = None
@@ -228,10 +240,11 @@ def _persist_row(fields: _OfferFields, ctx: _SchleiperContext) -> Offer:
             offer = Offer.objects.create(pk=fields.sprycer_id, **base_attrs)
     else:
         # No Sprycer ID -> UPSERT on legacy unique key (website, sku, public).
-        # public=True is the canonical Schleiper offer; soft-deleted ones live
-        # with public=False.
+        # Schleiper rows always land at public=False (matches legacy + the
+        # base_attrs dict above); the lookup must use the same value or every
+        # import creates a duplicate row.
         offer, _ = Offer.objects.update_or_create(
-            website=ctx.website, sku=fields.sku, public=True,
+            website=ctx.website, sku=fields.sku, public=False,
             defaults=base_attrs,
         )
 
@@ -300,7 +313,8 @@ class SchleiperImporter:
                 try:
                     fields = transform_row(row)
                     offer = _persist_row(fields, ctx)
-                    offers_to_embed.append(offer)
+                    if offer is not None:  # Deleted rows return None
+                        offers_to_embed.append(offer)
                 except Exception as exc:
                     result.failures += 1
                     # Match legacy Import.formated_failure_info shape: 'N: message'.

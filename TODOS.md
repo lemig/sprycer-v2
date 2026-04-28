@@ -123,6 +123,70 @@ Completed at the bottom.
   rebuild the chart from those rows.
 - **Where:** `core/admin.py`, new chart partial.
 
+## Concurrency & idempotency (Codex review findings, /review)
+
+These five P2 findings landed during the post-/ship Codex pass. None block cutover
+(the cutover-day workflow runs each command sequentially in one shot), but each
+becomes a real risk once H18 wires Fly scheduled machines that may overlap.
+
+**process_imports race condition**
+- **Priority:** P1 (before H18)
+- **What:** queue draining reads `Import` rows without locking and includes
+  `IMPORTING` status in the eligibility filter. Two concurrent workers can both
+  pick the same row and execute the importer twice, appending duplicate
+  `PriceObservation` rows for every catalog SKU.
+- **Where:** `core/management/commands/process_imports.py:58`.
+- **Fix:** claim with `select_for_update(skip_locked=True)` in an atomic block,
+  exclude `IMPORTING` from the pickup filter, add a heartbeat or timeout.
+
+**Matching pair-direction race**
+- **Priority:** P2
+- **What:** `run_matching_for_offer` does a check-then-create (`Matching.objects.filter(...).exists()`
+  followed by `Matching.objects.create`). Two concurrent runs can either raise
+  `IntegrityError` on the same direction or create both `(A, B)` and `(B, A)`
+  for one logical pair, since the DB unique constraint is directional.
+- **Where:** `core/matching.py:164`.
+- **Fix:** canonicalize pair ordering at write time (lower-id first) or wrap
+  in `try: get_or_create / except IntegrityError: skip`.
+
+**LLM NO is terminal forever**
+- **Priority:** P2
+- **What:** when the LLM returns NO, v2 writes a `REJECTED` Matching row. The
+  skip-if-exists guard then treats it identically to a human-rejected row —
+  one bad/prompt-injected LLM call permanently rejects a pair that may actually
+  be a match.
+- **Where:** `core/matching.py:186`.
+- **Fix:** store AI negatives in a separate non-terminal state (e.g. `AI_NO`)
+  with an expiry or retry policy; only `HUMAN_REJECTED` is terminal.
+
+**LLM ERRORED never retried**
+- **Priority:** P2
+- **What:** API failures during matching write `ERRORED` rows. The skip-if-exists
+  guard then treats them as terminal — that pair is never retried after the
+  outage clears.
+- **Where:** `core/matching.py:177`.
+- **Fix:** exclude `ERRORED` from the skip check, or add a retry-after timestamp.
+
+**migrate_legacy rerun duplicates**
+- **Priority:** P1 (before any cutover-day rerun)
+- **What:** the migration claims idempotency, but `_migrate_price_points` and
+  `_migrate_historical_versions` use `bulk_create` without a conflict key.
+  Re-running silently appends duplicate `PriceObservation` rows.
+- **Where:** `core/management/commands/migrate_legacy.py:390`.
+- **Fix:** add a stable uniqueness key on `PriceObservation` (e.g.
+  `(offer_id, observed_at, price_cents)`), or `TRUNCATE` the table before
+  reinserting in a transaction.
+
+**Matching direction (export visibility)**
+- **Priority:** P1 (cutover risk if legacy data has reverse-direction pairs)
+- **What:** `_competing_slots` walks `offer.matchings` only. A Matching stored
+  as `(competitor, schleiper)` (reverse direction) does not surface in the
+  Schleiper export. The migration imported legacy matchings as-is — needs a
+  spot-check against live data to confirm whether any are reversed.
+- **Where:** `core/exporters/offer_export.py:257`.
+- **Fix:** either normalize at write time (force lower-retailer-id-first) OR
+  query both directions when building `_competing_slots`.
+
 ## Cleanup
 
 **Multi-tenant scaffolding cleanup**

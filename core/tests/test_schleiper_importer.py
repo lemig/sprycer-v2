@@ -155,11 +155,13 @@ class TestRunImporter:
         assert Channel.objects.filter(name='schleiper.com/eshopexpress').count() == 1
         assert Channel.objects.filter(name='schleiper.com/onlinecatalogue').count() == 1
 
-    def test_imports_all_rows_with_failure_count_zero(self, import_obj):
+    def test_imports_active_rows(self, import_obj):
+        # Fixture has 5 rows; 1 has Deleted=true and is skipped per legacy
+        # `:delete` virtual-attribute semantics. 4 active offers land in DB.
         result = SchleiperImporter().run(import_obj)
         assert result.total == 5
         assert result.failures == 0
-        assert Offer.objects.count() == 5
+        assert Offer.objects.count() == 4
 
     def test_color_id_appears_in_name(self, import_obj):
         SchleiperImporter().run(import_obj)
@@ -181,10 +183,20 @@ class TestRunImporter:
         offer = Offer.objects.get(sku='WINPMY724')
         assert offer.pk == 124397
 
-    def test_deleted_row_is_soft_deleted(self, import_obj):
+    def test_deleted_row_is_skipped(self, import_obj):
+        # Legacy `:delete` virtual attribute destroyed the Offer row entirely.
+        # v2 mirror: skip writing the row. The DELETED01 SKU does not appear.
         SchleiperImporter().run(import_obj)
-        offer = Offer.objects.get(sku='DELETED01')
-        assert offer.public is False
+        assert not Offer.objects.filter(sku='DELETED01').exists()
+
+    def test_active_imports_land_as_public_false(self, import_obj):
+        # Schleiper imports always land at public=False to match the legacy
+        # Rails t.boolean default + the export's verified 21,760/21,760
+        # public=false rows. Setting public=True would flip every Public
+        # column on the next post-cutover export.
+        SchleiperImporter().run(import_obj)
+        for offer in Offer.objects.filter(retailer__name='Schleiper'):
+            assert offer.public is False, f'{offer.sku} has public=True'
 
     def test_comma_decimal_price_parsed_correctly(self, import_obj):
         SchleiperImporter().run(import_obj)
@@ -195,8 +207,8 @@ class TestRunImporter:
 
     def test_prices_recorded_for_each_priced_row(self, import_obj):
         SchleiperImporter().run(import_obj)
-        # 4 of 5 rows have a price (DELETED01 also has 5.00, so all 5 do).
-        assert PriceObservation.objects.count() == 5
+        # 5 fixture rows minus 1 Deleted=true row = 4 priced PriceObservations.
+        assert PriceObservation.objects.count() == 4
 
     def test_brand_created_with_alias_normalization(self, import_obj):
         SchleiperImporter().run(import_obj)

@@ -193,7 +193,16 @@ def _build_row(
     latest = _latest_observation(offer)
     slots = _competing_slots(offer)
     cheapest = _cheapest_slots(slots)
-    slots_by_competitor = {s.offer.retailer_id: s for s in slots}
+    # `slots` is sorted ascending by price (cheapest first). When a competitor
+    # has multiple confirmed offers paired to this Schleiper row, we want the
+    # CHEAPEST representative in the Competitor N block. A dict comprehension
+    # with `{retailer_id: s for s in slots}` would keep the LAST seen — i.e.
+    # the most expensive. Walk the list and take the first occurrence per
+    # retailer instead.
+    slots_by_competitor: dict[int, _CompetingSlot] = {}
+    for s in slots:
+        if s.offer.retailer_id not in slots_by_competitor:
+            slots_by_competitor[s.offer.retailer_id] = s
 
     row: dict[str, object] = {
         'Sprycer ID': offer.id,
@@ -217,9 +226,12 @@ def _build_row(
         if slot:
             row[h_name] = slot.offer.retailer.name
             row[h_sku] = slot.offer.sku
-            row[h_list] = format_euro(slot.list_price_cents) if slot.list_price_cents else ''
-            row[h_price] = format_euro(slot.price_cents) if slot.price_cents else ''
-            row[h_ship] = format_euro(slot.shipping_cents) if slot.shipping_cents else ''
+            # `is not None` so that legitimate zero values (free shipping,
+            # €0 promo prices) serialize as `€0` instead of an empty cell —
+            # any falsy-aware check would silently break byte-identity.
+            row[h_list] = format_euro(slot.list_price_cents) if slot.list_price_cents is not None else ''
+            row[h_price] = format_euro(slot.price_cents) if slot.price_cents is not None else ''
+            row[h_ship] = format_euro(slot.shipping_cents) if slot.shipping_cents is not None else ''
             row[h_date] = slot.price_date
         else:
             row[h_name] = ''
