@@ -83,6 +83,25 @@ Completed at the bottom.
 - **How:** seed from legacy. Track precision and recall on every prompt
   change. Block CI on regressions below baseline.
 
+**Sitemap-driven product discovery**
+- **Priority:** P2 (post-cutover, week 2+)
+- **What:** walk the Géant + R&P XML sitemaps once a month, diff against
+  `Page.url`, queue net-new URLs into the existing scrape pipeline. Closes
+  the closed-set limitation: today the matcher can only suggest competitors
+  it already scraped, so a Schleiper SKU whose competitor URL was never
+  seeded gets an empty Competitor N cell in the export — same gap the
+  legacy app had.
+- **Why:** Schleiper adds new SKUs continuously. The legacy URL master
+  list (`urls.csv`) drifted stale. Sitemap crawl + existing
+  `embed_offers` + `run_matching` chain auto-fills the missing matches
+  with no human input. Pairs naturally with H18 scheduled machines.
+- **How:** new `core/scrapers/sitemap.py` (parse `/sitemap.xml` or
+  `/sitemap_index.xml`, return `list[str]` of product URLs), new
+  `discover_pages` management command. Schedule monthly. Embedding cost
+  for first run is ~$5 at `text-embedding-3-small` pricing for ~50K
+  new offers per host; recurring runs only embed the delta.
+- **Where:** `core/scrapers/sitemap.py`, `core/management/commands/discover_pages.py`.
+
 **R&P variant page handling**
 - **Priority:** P3
 - **What:** color-variant + discriminant-choice pages on R&P don't expose
